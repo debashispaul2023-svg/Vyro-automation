@@ -1,0 +1,9 @@
+{
+  "campaign_id": "vyro_001",
+  "mandatory_hashtags": ["mrbeast"],
+  "required_links": ["https://vyro.ai/c/vyro_001"],
+  "watermark_text": "Use code 'MRBEAST'",
+  "min_seconds": 20,
+  "max_seconds": 35,
+  "referral_code": "MRBEAST"
+}
