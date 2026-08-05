@@ -1,1 +1,83 @@
+name: Vyro Campaign Pipeline
 
+on:
+  workflow_dispatch:
+    inputs:
+      source_video_url:
+        description: "Direct URL to the raw 16:9 source video"
+        required: true
+      campaign_json_path:
+        description: "Path (in repo) to the campaign requirements JSON"
+        required: true
+        default: "campaign.json"
+      hook:
+        description: "Video hook/title text"
+        required: true
+      summary:
+        description: "Short description summary"
+        required: false
+        default: ""
+      privacy:
+        description: "YouTube privacy status"
+        required: false
+        default: "unlisted"
+  push:
+    branches: [main]
+    paths:
+      - "campaign.json"
+
+jobs:
+  build-short:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download source video
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: curl -L "${{ github.event.inputs.source_video_url }}" -o input_16x9.mp4
+
+      - name: Restore YouTube OAuth token
+        env:
+          YOUTUBE_TOKEN_B64: ${{ secrets.YOUTUBE_TOKEN_B64 }}
+        run: echo "$YOUTUBE_TOKEN_B64" | base64 -d > token.json
+
+      - name: Run Vyro pipeline (render + metadata + validate + YouTube upload)
+        run: |
+          python main.py \
+            --campaign "${{ github.event.inputs.campaign_json_path || 'campaign.json' }}" \
+            --source input_16x9.mp4 \
+            --output output/short.mp4 \
+            --hook "${{ github.event.inputs.hook || 'Auto campaign clip' }}" \
+            --summary "${{ github.event.inputs.summary }}" \
+            --privacy "${{ github.event.inputs.privacy || 'unlisted' }}"
+
+      - name: Upload rendered short as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vyro-short
+          path: output/short.mp4
+
+      - name: Upload video URL as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-url
+          path: video_url.txt
+
+      - name: Print video URL in job summary
+        run: |
+          echo "### 🎬 Uploaded video URL — copy this into Vyro" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat video_url.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
