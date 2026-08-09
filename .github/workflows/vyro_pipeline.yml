@@ -50,7 +50,9 @@ jobs:
           URL="${{ github.event.inputs.source_video_url }}"
           if [[ "$URL" == *"drive.google.com"* ]]; then
             pip install --quiet gdown
-            gdown --fuzzy "$URL" -O input_16x9.mp4
+            FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[^/]+' || echo "$URL" | grep -oP '(?<=id=)[^&]+')
+            echo "Extracted file ID: $FILE_ID"
+            gdown "https://drive.google.com/uc?id=$FILE_ID" -O input_16x9.mp4
           else
             curl -L "$URL" -o input_16x9.mp4
           fi
@@ -58,6 +60,7 @@ jobs:
           ls -la input_16x9.mp4
           file input_16x9.mp4
           head -c 300 input_16x9.mp4 || true
+
       - name: Restore YouTube OAuth token
         env:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
