@@ -40,6 +40,8 @@ jobs:
 
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
+      - name: Fix ImageMagick security policy for text rendering
+        run: sudo sed -i '/pattern="@\*"/d' /etc/ImageMagick-6/policy.xml
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
