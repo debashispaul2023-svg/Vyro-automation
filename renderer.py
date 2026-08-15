@@ -51,19 +51,19 @@ def _crop_to_vertical(clip: VideoFileClip) -> VideoFileClip:
     source_ratio = clip.w / clip.h
 
     if source_ratio > target_ratio:
-        # Source is wider than target -> scale by height, crop width (sides)
-        scaled = clip.resize(height=TARGET_HEIGHT)
-        excess_width = scaled.w - TARGET_WIDTH
-        x1 = max(0, excess_width // 2)
-        cropped = scaled.crop(x1=x1, x2=x1 + TARGET_WIDTH, y1=0, y2=TARGET_HEIGHT)
+        # Source is wider than target -> crop width (sides), then scale
+        target_w = int(clip.h * target_ratio)
+        x1 = (clip.w - target_w) // 2
+        cropped = clip.crop(x1=x1, x2=x1 + target_w, y1=0, y2=clip.h)
+        scaled = cropped.resize(newsize=(TARGET_WIDTH, TARGET_HEIGHT))
     else:
-        # Source is taller/narrower than target -> scale by width, crop height
-        scaled = clip.resize(width=TARGET_WIDTH)
-        excess_height = scaled.h - TARGET_HEIGHT
-        y1 = max(0, excess_height // 2)
-        cropped = scaled.crop(x1=0, x2=TARGET_WIDTH, y1=y1, y2=y1 + TARGET_HEIGHT)
+        # Source is taller/narrower than target -> crop height, then scale
+        target_h = int(clip.w / target_ratio)
+        y1 = (clip.h - target_h) // 2
+        cropped = clip.crop(x1=0, x2=clip.w, y1=y1, y2=y1 + target_h)
+        scaled = cropped.resize(newsize=(TARGET_WIDTH, TARGET_HEIGHT))
 
-    return cropped.set_position("center")
+    return scaled.set_position("center")
 
 
 def _enforce_duration(
