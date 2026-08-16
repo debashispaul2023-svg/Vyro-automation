@@ -66,9 +66,7 @@ def _crop_to_vertical(clip: VideoFileClip) -> VideoFileClip:
     return scaled.set_position("center")
 
 
-def _enforce_duration(
-    clip: VideoFileClip, req: CampaignRequirements
-) -> VideoFileClip:
+def _enforce_duration(clip: VideoFileClip, req: CampaignRequirements) -> VideoFileClip:
     """Trim clip to max_seconds; raise if it can't reach min_seconds."""
     if clip.duration < req.min_seconds:
         raise RenderError(
@@ -94,12 +92,17 @@ def _build_karaoke_captions(
     caption_clips: list[TextClip] = []
     safe_zone_y = int(video_height * 0.45)  # center-safe zone
 
+    # ⚡ Bolt: Cache TextClips by word to avoid expensive redundant ImageMagick subprocess calls.
+    # MoviePy methods like .set_start() and .set_duration() return copies, so we can reuse the base clip.
+    # Expected impact: >10x speedup for repeated words in transcripts.
+    clip_cache: dict[str, TextClip] = {}
+
     for w in words:
         if w.end <= w.start:
             continue
         try:
-            txt_clip = (
-                TextClip(
+            if w.word not in clip_cache:
+                clip_cache[w.word] = TextClip(
                     w.word,
                     fontsize=90,
                     color=highlight_color,
@@ -108,13 +111,18 @@ def _build_karaoke_captions(
                     stroke_width=3,
                     method="label",
                 )
+
+            txt_clip = (
+                clip_cache[w.word]
                 .set_start(w.start)
                 .set_duration(w.end - w.start)
                 .set_position(("center", safe_zone_y))
             )
             caption_clips.append(txt_clip)
         except Exception as exc:  # noqa: BLE001
-            raise RenderError(f"Failed to render caption for word '{w.word}': {exc}") from exc
+            raise RenderError(
+                f"Failed to render caption for word '{w.word}': {exc}"
+            ) from exc
 
     return caption_clips
 
@@ -239,9 +247,7 @@ def render_short(
         layers = [vertical]
 
         if words:
-            layers.extend(
-                _build_karaoke_captions(words, TARGET_WIDTH, TARGET_HEIGHT)
-            )
+            layers.extend(_build_karaoke_captions(words, TARGET_WIDTH, TARGET_HEIGHT))
         elif fallback_caption_text:
             layers.extend(
                 _build_basic_captions(
