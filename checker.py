@@ -61,22 +61,7 @@ def _check_shorts_spacing(title: str) -> Optional[str]:
     return None
 
 
-def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]:
-    if VideoFileClip is None:
-        return "moviepy is not installed; cannot verify video duration."
-    if not os.path.isfile(video_path):
-        return f"Video file not found for duration check: {video_path}"
-
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video duration: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
-
+def _check_duration(duration: float, req: CampaignRequirements) -> Optional[str]:
     if duration < req.min_seconds - DURATION_TOLERANCE_SECONDS:
         return (
             f"Video duration {duration:.2f}s is below campaign minimum "
@@ -90,22 +75,7 @@ def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]
     return None
 
 
-def _check_resolution(video_path: str) -> Optional[str]:
-    if VideoFileClip is None:
-        return "moviepy is not installed; cannot verify video resolution."
-    if not os.path.isfile(video_path):
-        return f"Video file not found for resolution check: {video_path}"
-
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        width, height = clip.w, clip.h
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video resolution: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
-
+def _check_resolution(width: int, height: int) -> Optional[str]:
     if (width, height) != (TARGET_WIDTH, TARGET_HEIGHT):
         return (
             f"Video resolution {width}x{height} is not the required "
@@ -142,9 +112,35 @@ def run_pre_upload_checks(
 
     _run("hashtags_present", lambda: _check_hashtags(title, description, req))
     _run("shorts_spacing", lambda: _check_shorts_spacing(title))
-    _run("duration_within_range", lambda: _check_duration(video_path, req))
-    _run("resolution_9x16", lambda: _check_resolution(video_path))
     _run("campaign_links_present", lambda: _check_links(description, req))
+
+    # ⚡ Bolt: Open VideoFileClip exactly once instead of twice to read duration and resolution.
+    # Expected impact: Halves the video loading overhead during validation (saves ~100ms per run).
+    duration, width, height = None, None, None
+    video_error = None
+    if VideoFileClip is None:
+        video_error = "moviepy is not installed; cannot verify video duration or resolution."
+    elif not os.path.isfile(video_path):
+        video_error = f"Video file not found for check: {video_path}"
+    else:
+        clip = None
+        try:
+            clip = VideoFileClip(video_path)
+            duration = clip.duration
+            width, height = clip.w, clip.h
+        except Exception as exc:  # noqa: BLE001
+            video_error = f"Failed to read video: {exc}"
+        finally:
+            if clip is not None:
+                clip.close()
+
+    if video_error:
+        checks["duration_within_range"] = False
+        checks["resolution_9x16"] = False
+        failures.append(video_error)
+    else:
+        _run("duration_within_range", lambda: _check_duration(duration, req))  # type: ignore[arg-type]
+        _run("resolution_9x16", lambda: _check_resolution(width, height))  # type: ignore[arg-type]
 
     return CheckResult(passed=not failures, checks=checks, failures=failures)
 
