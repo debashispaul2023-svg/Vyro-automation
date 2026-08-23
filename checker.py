@@ -43,7 +43,9 @@ class CheckResult:
     failures: list[str] = field(default_factory=list)
 
 
-def _check_hashtags(title: str, description: str, req: CampaignRequirements) -> Optional[str]:
+def _check_hashtags(
+    title: str, description: str, req: CampaignRequirements
+) -> Optional[str]:
     combined = f"{title}\n{description}".lower()
     missing = [tag for tag in req.mandatory_hashtags if tag.lower() not in combined]
     if missing:
@@ -61,21 +63,8 @@ def _check_shorts_spacing(title: str) -> Optional[str]:
     return None
 
 
-def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]:
-    if VideoFileClip is None:
-        return "moviepy is not installed; cannot verify video duration."
-    if not os.path.isfile(video_path):
-        return f"Video file not found for duration check: {video_path}"
-
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video duration: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
+def _check_duration(clip: VideoFileClip, req: CampaignRequirements) -> Optional[str]:
+    duration = clip.duration
 
     if duration < req.min_seconds - DURATION_TOLERANCE_SECONDS:
         return (
@@ -90,21 +79,8 @@ def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]
     return None
 
 
-def _check_resolution(video_path: str) -> Optional[str]:
-    if VideoFileClip is None:
-        return "moviepy is not installed; cannot verify video resolution."
-    if not os.path.isfile(video_path):
-        return f"Video file not found for resolution check: {video_path}"
-
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        width, height = clip.w, clip.h
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video resolution: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
+def _check_resolution(clip: VideoFileClip) -> Optional[str]:
+    width, height = clip.w, clip.h
 
     if (width, height) != (TARGET_WIDTH, TARGET_HEIGHT):
         return (
@@ -117,7 +93,9 @@ def _check_resolution(video_path: str) -> Optional[str]:
 def _check_links(description: str, req: CampaignRequirements) -> Optional[str]:
     missing = [link for link in req.required_links if link not in description]
     if missing:
-        return f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        return (
+            f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        )
     return None
 
 
@@ -142,9 +120,32 @@ def run_pre_upload_checks(
 
     _run("hashtags_present", lambda: _check_hashtags(title, description, req))
     _run("shorts_spacing", lambda: _check_shorts_spacing(title))
-    _run("duration_within_range", lambda: _check_duration(video_path, req))
-    _run("resolution_9x16", lambda: _check_resolution(video_path))
     _run("campaign_links_present", lambda: _check_links(description, req))
+
+    if VideoFileClip is None:
+        _run(
+            "video_properties",
+            lambda: "moviepy is not installed; cannot verify video properties.",
+        )
+        return CheckResult(passed=not failures, checks=checks, failures=failures)
+
+    if not os.path.isfile(video_path):
+        _run("video_properties", lambda: f"Video file not found: {video_path}")
+        return CheckResult(passed=not failures, checks=checks, failures=failures)
+
+    clip = None
+    try:
+        # ⚡ Bolt: Cache VideoFileClip instance to avoid redundant subprocess calls.
+        # ffprobe is spawned every time VideoFileClip is instantiated.
+        # Expected impact: ~50% reduction in IO overhead during validation.
+        clip = VideoFileClip(video_path)
+        _run("duration_within_range", lambda: _check_duration(clip, req))
+        _run("resolution_9x16", lambda: _check_resolution(clip))
+    except Exception as exc:  # noqa: BLE001
+        _run("video_properties", lambda: f"Failed to read video properties: {exc}")
+    finally:
+        if clip is not None:
+            clip.close()
 
     return CheckResult(passed=not failures, checks=checks, failures=failures)
 
