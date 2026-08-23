@@ -5,3 +5,7 @@
 ## 2024-08-16 - MoviePy TextClip ImageMagick Overhead
 **Learning:** Instantiating `TextClip` objects in MoviePy is surprisingly slow because it spawns an external ImageMagick (`convert`) process to render each piece of text. For karaoke-style captions where words repeat frequently (e.g., "the", "and"), generating a new `TextClip` for every instance creates a massive performance bottleneck.
 **Action:** Always cache and reuse base `TextClip` objects for identical strings. MoviePy's chainable modifier methods like `.set_start()`, `.set_duration()`, and `.set_position()` safely return lightweight copies, making it safe to mutate the timing/position of a single cached text render.
+
+## 2024-08-23 - MoviePy VideoFileClip Redundant Instantiation Overhead
+**Learning:** Instantiating `VideoFileClip` in MoviePy is relatively expensive because it shells out to `ffprobe` (via `imageio`) to parse the video headers and metadata. If multiple properties (like duration, resolution, fps) need to be checked, instantiating a new `VideoFileClip` for each check multiplies this subprocess overhead unnecessarily.
+**Action:** Always instantiate `VideoFileClip` once, pass the instance to functions that need to inspect its properties, and ensure it is properly closed using a `finally` block when done.
