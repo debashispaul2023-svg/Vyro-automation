@@ -43,7 +43,9 @@ class CheckResult:
     failures: list[str] = field(default_factory=list)
 
 
-def _check_hashtags(title: str, description: str, req: CampaignRequirements) -> Optional[str]:
+def _check_hashtags(
+    title: str, description: str, req: CampaignRequirements
+) -> Optional[str]:
     combined = f"{title}\n{description}".lower()
     missing = [tag for tag in req.mandatory_hashtags if tag.lower() not in combined]
     if missing:
@@ -61,21 +63,28 @@ def _check_shorts_spacing(title: str) -> Optional[str]:
     return None
 
 
-def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]:
+def _check_duration(
+    video_path: str,
+    req: CampaignRequirements,
+    cached_props: tuple[float, int, int] | None = None,
+) -> Optional[str]:
     if VideoFileClip is None:
         return "moviepy is not installed; cannot verify video duration."
     if not os.path.isfile(video_path):
         return f"Video file not found for duration check: {video_path}"
 
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video duration: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
+    if cached_props:
+        duration = cached_props[0]
+    else:
+        clip = None
+        try:
+            clip = VideoFileClip(video_path)
+            duration = clip.duration
+        except Exception as exc:  # noqa: BLE001
+            return f"Failed to read video duration: {exc}"
+        finally:
+            if clip is not None:
+                clip.close()
 
     if duration < req.min_seconds - DURATION_TOLERANCE_SECONDS:
         return (
@@ -90,21 +99,26 @@ def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]
     return None
 
 
-def _check_resolution(video_path: str) -> Optional[str]:
+def _check_resolution(
+    video_path: str, cached_props: tuple[float, int, int] | None = None
+) -> Optional[str]:
     if VideoFileClip is None:
         return "moviepy is not installed; cannot verify video resolution."
     if not os.path.isfile(video_path):
         return f"Video file not found for resolution check: {video_path}"
 
-    clip = None
-    try:
-        clip = VideoFileClip(video_path)
-        width, height = clip.w, clip.h
-    except Exception as exc:  # noqa: BLE001
-        return f"Failed to read video resolution: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
+    if cached_props:
+        width, height = cached_props[1], cached_props[2]
+    else:
+        clip = None
+        try:
+            clip = VideoFileClip(video_path)
+            width, height = clip.w, clip.h
+        except Exception as exc:  # noqa: BLE001
+            return f"Failed to read video resolution: {exc}"
+        finally:
+            if clip is not None:
+                clip.close()
 
     if (width, height) != (TARGET_WIDTH, TARGET_HEIGHT):
         return (
@@ -117,7 +131,9 @@ def _check_resolution(video_path: str) -> Optional[str]:
 def _check_links(description: str, req: CampaignRequirements) -> Optional[str]:
     missing = [link for link in req.required_links if link not in description]
     if missing:
-        return f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        return (
+            f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        )
     return None
 
 
@@ -134,6 +150,20 @@ def run_pre_upload_checks(
     checks: dict[str, bool] = {}
     failures: list[str] = []
 
+    # ⚡ Bolt: Fetch video properties once per run to avoid redundant VideoFileClip initializations.
+    # Expected impact: Halves the file I/O overhead during pre-upload validation.
+    cached_props = None
+    if VideoFileClip is not None and os.path.isfile(video_path):
+        clip = None
+        try:
+            clip = VideoFileClip(video_path)
+            cached_props = (clip.duration, clip.w, clip.h)
+        except Exception:
+            pass
+        finally:
+            if clip is not None:
+                clip.close()
+
     def _run(name: str, fn) -> None:  # noqa: ANN001
         error = fn()
         checks[name] = error is None
@@ -142,8 +172,10 @@ def run_pre_upload_checks(
 
     _run("hashtags_present", lambda: _check_hashtags(title, description, req))
     _run("shorts_spacing", lambda: _check_shorts_spacing(title))
-    _run("duration_within_range", lambda: _check_duration(video_path, req))
-    _run("resolution_9x16", lambda: _check_resolution(video_path))
+    _run(
+        "duration_within_range", lambda: _check_duration(video_path, req, cached_props)
+    )
+    _run("resolution_9x16", lambda: _check_resolution(video_path, cached_props))
     _run("campaign_links_present", lambda: _check_links(description, req))
 
     return CheckResult(passed=not failures, checks=checks, failures=failures)
