@@ -24,6 +24,27 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 DURATION_TOLERANCE_SECONDS = 0.5
 
+_video_properties_cache: dict[str, tuple[float, float, int, int]] = {}
+
+
+def _get_video_properties(video_path: str) -> tuple[float, int, int]:
+    """Caches and returns (duration, width, height) for a given video path."""
+    mtime = os.path.getmtime(video_path)
+    if video_path in _video_properties_cache:
+        cached_mtime, duration, w, h = _video_properties_cache[video_path]
+        if cached_mtime == mtime:
+            return duration, w, h
+
+    clip = None
+    try:
+        clip = VideoFileClip(video_path)
+        duration, w, h = clip.duration, clip.w, clip.h
+        _video_properties_cache[video_path] = (mtime, duration, w, h)
+        return duration, w, h
+    finally:
+        if clip is not None:
+            clip.close()
+
 
 class ValidationError(Exception):
     """Raised when one or more pre-upload compliance checks fail."""
@@ -43,7 +64,9 @@ class CheckResult:
     failures: list[str] = field(default_factory=list)
 
 
-def _check_hashtags(title: str, description: str, req: CampaignRequirements) -> Optional[str]:
+def _check_hashtags(
+    title: str, description: str, req: CampaignRequirements
+) -> Optional[str]:
     combined = f"{title}\n{description}".lower()
     missing = [tag for tag in req.mandatory_hashtags if tag.lower() not in combined]
     if missing:
@@ -67,15 +90,10 @@ def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]
     if not os.path.isfile(video_path):
         return f"Video file not found for duration check: {video_path}"
 
-    clip = None
     try:
-        clip = VideoFileClip(video_path)
-        duration = clip.duration
+        duration, _, _ = _get_video_properties(video_path)
     except Exception as exc:  # noqa: BLE001
         return f"Failed to read video duration: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
 
     if duration < req.min_seconds - DURATION_TOLERANCE_SECONDS:
         return (
@@ -96,15 +114,10 @@ def _check_resolution(video_path: str) -> Optional[str]:
     if not os.path.isfile(video_path):
         return f"Video file not found for resolution check: {video_path}"
 
-    clip = None
     try:
-        clip = VideoFileClip(video_path)
-        width, height = clip.w, clip.h
+        _, width, height = _get_video_properties(video_path)
     except Exception as exc:  # noqa: BLE001
         return f"Failed to read video resolution: {exc}"
-    finally:
-        if clip is not None:
-            clip.close()
 
     if (width, height) != (TARGET_WIDTH, TARGET_HEIGHT):
         return (
@@ -117,7 +130,9 @@ def _check_resolution(video_path: str) -> Optional[str]:
 def _check_links(description: str, req: CampaignRequirements) -> Optional[str]:
     missing = [link for link in req.required_links if link not in description]
     if missing:
-        return f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        return (
+            f"Missing mandatory campaign link(s) in description: {', '.join(missing)}"
+        )
     return None
 
 
