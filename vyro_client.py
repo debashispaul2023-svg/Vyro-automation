@@ -34,6 +34,7 @@ payouts.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -59,20 +60,86 @@ class VyroCampaign:
     submit_page_url: str    # URL of this campaign's submission page
 
 
+def _fill_first_match(page: Page, candidates: list, value: str, what: str) -> None:
+    """Try a list of (locator-building lambda) candidates in order; use the
+    first one that actually appears on the page. This avoids needing the
+    exact CSS selector/class name — placeholder text and input type are
+    usually stable even when Vyro's internal class names change."""
+    last_exc: Exception | None = None
+    for build_locator in candidates:
+        try:
+            locator = build_locator(page)
+            locator.wait_for(state="visible", timeout=4000)
+            locator.fill(value)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            continue
+    raise VyroClientError(
+        f"Could not find the {what} field — none of the known patterns "
+        f"matched. Last error: {last_exc}"
+    )
+
+
+def _click_first_match(page: Page, candidates: list, what: str) -> None:
+    last_exc: Exception | None = None
+    for build_locator in candidates:
+        try:
+            locator = build_locator(page)
+            locator.wait_for(state="visible", timeout=4000)
+            locator.click()
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            continue
+    raise VyroClientError(
+        f"Could not find the {what} button — none of the known patterns "
+        f"matched. Last error: {last_exc}"
+    )
+
+
 def _login(page: Page, email: str, password: str) -> None:
     page.goto(VYRO_LOGIN_URL, timeout=DEFAULT_TIMEOUT_MS)
+    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+
     try:
-        # TODO: replace with the real selectors from Vyro's login form
-        # (Inspect Element on the email box / password box / sign-in button)
-        page.fill('input[type="email"]', email, timeout=DEFAULT_TIMEOUT_MS)
-        page.fill('input[type="password"]', password, timeout=DEFAULT_TIMEOUT_MS)
-        page.click('button[type="submit"]', timeout=DEFAULT_TIMEOUT_MS)
+        # Tries several common patterns in order — placeholder text, input
+        # type, and name attribute — so this keeps working even without
+        # knowing Vyro's exact internal CSS class names.
+        _fill_first_match(
+            page,
+            [
+                lambda p: p.get_by_placeholder("Email", exact=False),
+                lambda p: p.locator('input[type="email"]'),
+                lambda p: p.locator('input[name="email"]'),
+            ],
+            email,
+            "email",
+        )
+        _fill_first_match(
+            page,
+            [
+                lambda p: p.get_by_placeholder("Password", exact=False),
+                lambda p: p.locator('input[type="password"]'),
+                lambda p: p.locator('input[name="password"]'),
+            ],
+            password,
+            "password",
+        )
+        _click_first_match(
+            page,
+            [
+                lambda p: p.get_by_role("button", name=re.compile(r"log\s*in|sign\s*in", re.I)),
+                lambda p: p.locator('button[type="submit"]'),
+                lambda p: p.get_by_text(re.compile(r"log\s*in|sign\s*in", re.I)),
+            ],
+            "log in / sign in",
+        )
         page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    except VyroClientError:
+        raise
     except PlaywrightTimeoutError as exc:
-        raise VyroClientError(
-            "Login failed — a selector in vyro_client.py:_login() didn't "
-            f"match anything on the page. Details: {exc}"
-        ) from exc
+        raise VyroClientError(f"Login failed — timed out. Details: {exc}") from exc
 
     if "login" in page.url:
         raise VyroClientError(
