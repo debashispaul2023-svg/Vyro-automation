@@ -37,10 +37,14 @@ jobs:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
         run: echo "$YOUTUBE_TOKEN_JSON" > token.json
 
-      - name: Run daily check + full pipeline (Vyro -> render -> YouTube -> Vyro)
+      - name: Run daily check + full pipeline (Vyro/Whop -> render -> YouTube -> Instagram -> submit)
         env:
-          VYRO_EMAIL: ${{ secrets.VYRO_EMAIL }}
-          VYRO_PASSWORD: ${{ secrets.VYRO_PASSWORD }}
+          VYRO_SESSION_COOKIE: ${{ secrets.VYRO_SESSION_COOKIE }}
+          WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
+          ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact (if any)
