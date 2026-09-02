@@ -4,13 +4,14 @@ daily_runner.py
 Fully-automated entrypoint, meant to run on a daily schedule (GitHub Actions
 cron — see .github/workflows/vyro_daily.yml):
 
-  1. Log in to Vyro and check for an active campaign (vyro_client.run_check)
-  2. Skip cleanly if there's no campaign today, or if this campaign_id was
+  1. Check Vyro for an active campaign. If none, check Whop too.
+  2. Skip cleanly if nothing found anywhere, or if the found campaign_id was
      already processed before (tracked in processed_campaigns.json)
-  3. Download the campaign's ~1 minute source clip
+  3. Download the campaign's source clip
   4. Parse requirements -> render vertical short -> generate metadata ->
-     validate -> upload to YouTube
-  5. Log back into Vyro and submit the resulting YouTube link
+     validate -> upload to YouTube -> upload to Instagram Reels
+  5. Submit the resulting YouTube link back to whichever platform (Vyro or
+     Whop) the campaign came from
   6. Record the campaign_id as processed, so it's never submitted twice
 
 Usage (locally or in CI):
@@ -23,19 +24,28 @@ import json
 import os
 import subprocess
 import sys
+from typing import Callable, Union
 
 import requests
 
 from checker import ValidationError, validate_or_raise
+from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, generate_metadata
 from renderer import RenderError, render_short
 from requirements_parser import RequirementsParseError, parse_campaign
-from vyro_client import VyroCampaign, VyroClientError, run_check, run_submit
+from vyro_client import VyroCampaign, VyroClientError
+from vyro_client import run_check as vyro_run_check
+from vyro_client import run_submit as vyro_run_submit
+from whop_client import WhopCampaign, WhopClientError
+from whop_client import run_check as whop_run_check
+from whop_client import run_submit as whop_run_submit
 from youtube_uploader import UploadError, upload_video
 
 PROCESSED_LOG_PATH = "processed_campaigns.json"
 SOURCE_CLIP_PATH = "input_16x9.mp4"
 OUTPUT_PATH = "output/short.mp4"
+
+Campaign = Union[VyroCampaign, WhopCampaign]
 
 
 def _load_processed() -> set[str]:
@@ -73,7 +83,40 @@ def _download_source_clip(url: str, dest_path: str) -> None:
             f.write(chunk)
 
 
-def process_campaign(campaign: VyroCampaign) -> int:
+def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
+    """Checks Vyro first, then Whop. Returns (platform_name, campaign) or
+    (None, None) if nothing is available anywhere."""
+    try:
+        vyro_campaign = vyro_run_check()
+    except VyroClientError as exc:
+        print(f"Vyro check failed: {exc}", file=sys.stderr)
+        vyro_campaign = None
+
+    if vyro_campaign is not None:
+        return "vyro", vyro_campaign
+
+    try:
+        whop_campaign = whop_run_check()
+    except WhopClientError as exc:
+        print(f"Whop check failed: {exc}", file=sys.stderr)
+        whop_campaign = None
+
+    if whop_campaign is not None:
+        return "whop", whop_campaign
+
+    return None, None
+
+
+def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
+    if platform == "vyro":
+        vyro_run_submit(campaign, video_url)
+    elif platform == "whop":
+        whop_run_submit(campaign, video_url)
+    else:
+        raise ValueError(f"Unknown platform: {platform}")
+
+
+def process_campaign(platform: str, campaign: Campaign) -> int:
     try:
         req = parse_campaign(campaign.requirements_text or campaign.name)
         req.campaign_id = campaign.campaign_id
@@ -83,7 +126,7 @@ def process_campaign(campaign: VyroCampaign) -> int:
 
     try:
         _download_source_clip(campaign.source_clip_url, SOURCE_CLIP_PATH)
-        print(f"[1/4] Downloaded source clip -> {SOURCE_CLIP_PATH}")
+        print(f"[1/5] Downloaded source clip -> {SOURCE_CLIP_PATH}")
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to download source clip: {exc}", file=sys.stderr)
         return 1
@@ -97,14 +140,14 @@ def process_campaign(campaign: VyroCampaign) -> int:
             req=req,
             fallback_caption_text=hook,
         )
-        print(f"[2/4] Rendered vertical short -> {OUTPUT_PATH}")
+        print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
 
         meta = generate_metadata(
             hook=hook,
             summary=(campaign.requirements_text or "")[:200],
             req=req,
         )
-        print(f"[3/4] Generated metadata. Title: {meta.title}")
+        print(f"[3/5] Generated metadata. Title: {meta.title}")
 
         validate_or_raise(
             video_path=OUTPUT_PATH,
@@ -121,7 +164,7 @@ def process_campaign(campaign: VyroCampaign) -> int:
             privacy_status="public",
             token_path="token.json",
         )
-        print(f"[4/4] Uploaded to YouTube: {result.video_url}")
+        print(f"[4/5] Uploaded to YouTube: {result.video_url}")
     except RenderError as exc:
         print(f"Rendering failed: {exc}", file=sys.stderr)
         return 1
@@ -136,11 +179,23 @@ def process_campaign(campaign: VyroCampaign) -> int:
         return 1
 
     try:
-        run_submit(campaign, result.video_url)
-        print(f"Submitted {result.video_url} to Vyro campaign '{campaign.campaign_id}'.")
-    except VyroClientError as exc:
+        instagram_media_id = upload_reel(
+            video_path=OUTPUT_PATH,
+            caption=f"{meta.title}\n\n{meta.description}",
+            release_tag=f"clip-{platform}-{campaign.campaign_id}",
+        )
+        print(f"[5/5] Uploaded to Instagram Reels: {instagram_media_id}")
+    except InstagramUploadError as exc:
+        # Instagram is a bonus channel — don't fail the whole run if only
+        # this step breaks, since YouTube already succeeded.
+        print(f"Instagram upload failed (continuing anyway): {exc}", file=sys.stderr)
+
+    try:
+        _submit_back(platform, campaign, result.video_url)
+        print(f"Submitted {result.video_url} to {platform} campaign '{campaign.campaign_id}'.")
+    except (VyroClientError, WhopClientError) as exc:
         print(
-            f"Upload succeeded but Vyro submission failed: {exc}\n"
+            f"Upload succeeded but {platform} submission failed: {exc}\n"
             f"SUBMIT THIS URL MANUALLY: {result.video_url}",
             file=sys.stderr,
         )
@@ -152,23 +207,19 @@ def process_campaign(campaign: VyroCampaign) -> int:
 def main() -> int:
     processed = _load_processed()
 
-    try:
-        campaign = run_check()
-    except VyroClientError as exc:
-        print(f"Vyro check failed: {exc}", file=sys.stderr)
-        return 1
+    platform, campaign = _find_campaign()
 
     if campaign is None:
-        print("No active campaign today. Exiting.")
+        print("No active campaign today on Vyro or Whop. Exiting.")
         return 0
 
     if campaign.campaign_id in processed:
-        print(f"Campaign '{campaign.campaign_id}' already processed. Skipping.")
+        print(f"Campaign '{campaign.campaign_id}' ({platform}) already processed. Skipping.")
         return 0
 
-    print(f"Found new campaign: {campaign.campaign_id} — {campaign.name}")
+    print(f"Found new campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
 
-    status = process_campaign(campaign)
+    status = process_campaign(platform, campaign)
     if status == 0:
         processed.add(campaign.campaign_id)
         _save_processed(processed)

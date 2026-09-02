@@ -22,7 +22,32 @@
 
 ```
 
-## ⚠️ ধাপ ০ (বাধ্যতামূলক): Vyro সিলেক্টর বের করা
+## ⚠️ ধাপ ০ (বাধ্যতামূলক): Vyro সেশন কুকি বের করা
+
+Vyro-তে পাসওয়ার্ড নেই — লগইন করতে ইমেইলে OTP আসে, তাই email+password bot দিয়ে
+automate করা যায় না। এর বদলে আমরা তোমার **লগইন সেশন কুকি** (`vyro_sid`) একবার
+ম্যানুয়ালি বের করে GitHub Secret-এ রাখব — বট রোজ এই কুকি দিয়েই সরাসরি
+লগইন হয়ে যাবে, নতুন করে OTP লাগবে না।
+
+**যেভাবে বের করবে (ফোন থেকেই সম্ভব, Kiwi Browser দিয়ে):**
+1. Play Store থেকে **Kiwi Browser** ইনস্টল করো (এটাতে ডেস্কটপ Chrome-এর মতো DevTools আছে)
+2. Kiwi দিয়ে `app.vyro.com` খুলে normal OTP দিয়ে লগইন করে dashboard-এ ঢোকো
+3. উপরে **⋮ মেনু → Developer tools**
+4. DevTools-এর ট্যাব বারে **"Application"** ট্যাবে যাও
+5. বামপাশে **Storage → Cookies → https://app.vyro.com**-এ ট্যাপ করো
+6. তালিকায় **`vyro_sid`** নামের কুকি খুঁজে বের করো, তার **Value**-এর উপর ট্যাপ করে ধরে রেখে **পুরো (untruncated) মান কপি করো**
+7. GitHub রিপোর **Settings → Secrets and variables → Actions**-এ গিয়ে নতুন secret বানাও:
+   - Name: `VYRO_SESSION_COOKIE`
+   - Value: কপি করা `vyro_sid`-এর মান
+
+**গুরুত্বপূর্ণ:** এই সেশন সাধারণত কয়েক সপ্তাহ/মাস কাজ করবে। মেয়াদ শেষ হলে
+workflow লগে **"Vyro session expired"** এরর দেখাবে — তখন এই ধাপগুলো আবার
+রিপিট করে শুধু secret-টা আপডেট করলেই চলবে, কোড বদলাতে হবে না।
+
+আগে যদি `VYRO_EMAIL` / `VYRO_PASSWORD` নামে secret বানিয়ে থাকো, ওগুলো এখন আর
+ব্যবহার হয় না — চাইলে মুছে ফেলতে পারো (রেখে দিলেও ক্ষতি নেই)।
+
+## ⚠️ পরের ধাপ: বাকি Vyro সিলেক্টর বের করা
 
 `vyro_client.py`-তে যেসব লাইনে `# TODO` কমেন্ট আছে, ওগুলো placeholder — আমি
 তোমার লগইন করা Vyro ড্যাশবোর্ড নিজে দেখতে পারি না, তাই আসল HTML স্ট্রাকচার
@@ -108,10 +133,9 @@ Vyro-র কোনো পাবলিক সাবমিশন API নেই —
 নিজে থেকে চলবে GitHub Actions cron দিয়ে।
 
 1. উপরের **ধাপ ০** এবং **ধাপ ১** (YouTube token) আগে শেষ করো
-2. GitHub রিপোর **Settings → Secrets and variables → Actions**-এ এই ৩টা secret যোগ করো:
-   - `VYRO_EMAIL` — তোমার Vyro লগইন ইমেইল
-   - `VYRO_PASSWORD` — তোমার Vyro পাসওয়ার্ড
-   - `YOUTUBE_TOKEN_JSON` — `token.json` ফাইলের পুরো কন্টেন্ট (রেখে দিন, base64 লাগবে না — সরাসরি JSON content)
+2. GitHub রিপোর **Settings → Secrets and variables → Actions**-এ এই secret গুলো যোগ করো:
+   - `VYRO_SESSION_COOKIE` — তোমার Vyro-র `vyro_sid` কুকির মান (উপরে "ধাপ ০"-এ যেভাবে বের করেছ)
+   - `YOUTUBE_TOKEN_JSON` — `token.json` ফাইলের পুরো কন্টেন্ট (সরাসরি JSON, base64 লাগবে না)
 3. `.github/workflows/vyro_daily.yml` ফাইলে `cron: "0 6 * * *"` — চাইলে সময় বদলাও ([crontab.guru](https://crontab.guru) দিয়ে সহজে বানানো যায়)
 4. রিপোতে সব ফাইল পুশ করো (`token.json`/`client_secrets.json` ছাড়া)
 5. **Actions → Vyro Daily Full Automation → Run workflow** দিয়ে প্রথমবার ম্যানুয়ালি টেস্ট করো
@@ -120,6 +144,62 @@ Vyro-র কোনো পাবলিক সাবমিশন API নেই —
 এরপর থেকে প্রতিদিন নিজে থেকে চলবে: ক্যাম্পেইন না থাকলে চুপচাপ স্কিপ করবে,
 থাকলে পুরো পাইপলাইন চালিয়ে Vyro-তে লিংক জমা দিয়ে দেবে, এবং
 `processed_campaigns.json`-এ লিখে রাখবে যাতে একই ক্যাম্পেইন দুইবার সাবমিট না হয়।
+
+## ধাপ ৬: Instagram Reels আপলোড সেটআপ (সম্পন্ন)
+
+`IG_ACCESS_TOKEN` আর `IG_BUSINESS_ACCOUNT_ID` secret ইতিমধ্যে সেট করা হয়েছে।
+Instagram তার API দিয়ে সরাসরি ফাইল নেয় না — একটা পাবলিক URL থেকে ভিডিও
+"টেনে" নেয়, তাই `instagram_uploader.py` রেন্ডার হওয়া ভিডিওকে সাময়িকভাবে
+একটা **আলাদা পাবলিক GitHub রিপোতে** Release asset হিসেবে আপলোড করে,
+সেই লিংক Instagram-কে দেয়, publish হওয়ার পর ওই temporary ফাইলটা থেকে যায়
+(চাইলে periodically রিলিজ মুছে ফেলার automation পরে যোগ করা যাবে)।
+
+**এই ২টা অতিরিক্ত secret লাগবে:**
+
+1. GitHub-এ একটা নতুন **PUBLIC** রিপো বানাও (শুধু ভিডিও হোস্ট করার জন্য, কোনো কোড রাখতে হবে না) — যেমন নাম `vyro-media-host`
+2. GitHub → প্রোফাইল ছবি → **Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**
+   - Scope-এ শুধু **`repo`** টিক দাও
+   - Expiration: চাইলে "No expiration" বা ১ বছর
+   - Generate করে টোকেনটা কপি করে রাখো (একবারই দেখাবে)
+3. মূল automation রিপোতে (Vyro-automation) দুটো secret যোগ করো:
+   - `ASSET_HOST_REPO` — মান: `তোমার-ইউজারনেম/vyro-media-host` (উদাহরণ: `debashispaul2023-svg/vyro-media-host`)
+   - `ASSET_HOST_TOKEN` — মান: উপরে বানানো Personal Access Token
+
+এই দুটো সেট হলেই Instagram আপলোড ধাপ কাজ করবে। YouTube upload ব্যর্থ হলে পুরো
+রান বন্ধ হয়ে যাবে, কিন্তু Instagram ধাপ ব্যর্থ হলে শুধু লগে এরর দেখাবে আর
+বাকি পাইপলাইন (Vyro-তে লিংক সাবমিট) চালিয়ে যাবে — Instagram-কে "বোনাস"
+চ্যানেল হিসেবে ধরা হয়েছে যাতে এটার সমস্যায় মূল YouTube+Vyro ফ্লো আটকে না যায়।
+
+`IG_ACCESS_TOKEN` প্রতি ৬০ দিনে মেয়াদ শেষ হবে — তখন Meta Developer App →
+Instagram → API setup with Instagram login → আবার "Generate token" চেপে
+নতুন টোকেন দিয়ে secret আপডেট করতে হবে।
+
+## ধাপ ৭: Whop সেটআপ (দ্বিতীয় ক্যাম্পেইন সোর্স)
+
+Whop-এ Google দিয়ে লগইন করো বলে সরাসরি লগইন automate করা যায় না। এর বদলে
+পুরো cookie জার (একসাথে সবগুলো cookie) কপি করে GitHub Secret-এ রাখতে হবে।
+
+**যেভাবে বের করবে:**
+1. Kiwi Browser দিয়ে whop.com-এ Google দিয়ে লগইন করো
+2. DevTools → **Network** ট্যাব → পেজ রিফ্রেশ করো
+3. whop.com-এ যাওয়া যেকোনো একটা request-এ ট্যাপ করো
+4. **Headers** ট্যাবে **Request Headers** সেকশনে **"Cookie:"** লাইন খুঁজো
+5. পুরো লম্বা মানটা (সব cookie সহ) কপি করো
+6. GitHub secret: `WHOP_COOKIE_HEADER` — মান: এই পুরো cookie স্ট্রিং
+
+**⚠️ সম্ভাব্য সমস্যা:** এই cookie-গুলোর একটা (`cf_clearance`) Cloudflare-এর
+bot-protection pass-token, যেটা তোমার নির্দিষ্ট IP-র সাথে বাঁধা থাকতে পারে।
+GitHub Actions সার্ভার ভিন্ন IP থেকে চলে বলে এটা কাজ নাও করতে পারে — চেষ্টা
+করে দেখব, না হলে ভিন্ন সমাধান (residential proxy ইত্যাদি) লাগবে।
+
+**⚠️ campaign scraping এখনো অসম্পূর্ণ:** `whop_client.py`-তে ক্যাম্পেইন
+কার্ড/ফর্মের selector গুলো এখনো placeholder (`# TODO`), কারণ এখনো কোনো
+active campaign Whop-এ নেই দেখার জন্য। ক্যাম্পেইন এলে DevTools স্ক্রিনশট
+পাঠালে সেগুলো ঠিক করে দেওয়া হবে (Vyro-র জন্য যেভাবে করা হয়েছিল)।
+
+`daily_runner.py` এখন প্রথমে Vyro চেক করবে, কিছু না পেলে Whop-ও চেক করবে,
+যেখানে campaign পাবে সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক
+সাবমিট করবে।
 
 ## গুরুত্বপূর্ণ সতর্কতা
 - Vyro-তে bot দিয়ে auto-login/auto-submit করা তাদের Terms of Service ভঙ্গ করতে পারে। এটা সম্পূর্ণ তোমার নিজের অ্যাকাউন্ট, নিজের ঝুঁকি — Vyro-র ToS একবার পড়ে নেওয়া ভালো।
