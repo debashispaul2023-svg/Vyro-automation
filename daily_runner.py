@@ -4,15 +4,20 @@ daily_runner.py
 Fully-automated entrypoint, meant to run on a daily schedule (GitHub Actions
 cron — see .github/workflows/vyro_daily.yml):
 
-  1. Check Vyro for an active campaign. If none, check Whop too.
-  2. Skip cleanly if nothing found anywhere, or if the found campaign_id was
+  1. Check Vyro for an active campaign. If none (or it's low-quality per the
+     AI screen), check Whop too.
+  2. Ask ai_brain to sanity-check the campaign's requirements — skip and try
+     the other platform if it looks like a scam/low-effort listing.
+  3. Skip cleanly if nothing found anywhere, or if the found campaign_id was
      already processed before (tracked in processed_campaigns.json)
-  3. Download the campaign's source clip
-  4. Parse requirements -> render vertical short -> generate metadata ->
-     validate -> upload to YouTube -> upload to Instagram Reels
-  5. Submit the resulting YouTube link back to whichever platform (Vyro or
+  4. Download the campaign's source clip
+  5. Parse requirements with AI (falls back to regex parsing if the API
+     call fails) -> render vertical short -> generate AI-written metadata
+     (falls back to the template version on API failure) -> validate ->
+     upload to YouTube -> upload to Instagram Reels
+  6. Submit the resulting YouTube link back to whichever platform (Vyro or
      Whop) the campaign came from
-  6. Record the campaign_id as processed, so it's never submitted twice
+  7. Record the campaign_id as processed, so it's never submitted twice
 
 Usage (locally or in CI):
     python daily_runner.py
@@ -24,15 +29,16 @@ import json
 import os
 import subprocess
 import sys
-from typing import Callable, Union
+from typing import Union
 
 import requests
 
+from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
 from checker import ValidationError, validate_or_raise
 from instagram_uploader import InstagramUploadError, upload_reel
-from metadata import MetadataError, generate_metadata
+from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
-from requirements_parser import RequirementsParseError, parse_campaign
+from requirements_parser import CampaignRequirements, RequirementsParseError, parse_campaign
 from vyro_client import VyroCampaign, VyroClientError
 from vyro_client import run_check as vyro_run_check
 from vyro_client import run_submit as vyro_run_submit
@@ -83,16 +89,33 @@ def _download_source_clip(url: str, dest_path: str) -> None:
             f.write(chunk)
 
 
+def _screen_campaign(platform: str, campaign: Campaign) -> bool:
+    """Returns True if the campaign passes the AI quality screen (or the
+    screen itself is unavailable, in which case we don't block on it)."""
+    try:
+        score = ai_score_campaign(campaign.requirements_text or campaign.name)
+    except AIBrainError as exc:
+        print(f"AI campaign screening unavailable ({exc}); proceeding anyway.", file=sys.stderr)
+        return True
+
+    if not score.is_good:
+        print(f"Skipping {platform} campaign '{campaign.campaign_id}': {score.reason}")
+        return False
+    return True
+
+
 def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
-    """Checks Vyro first, then Whop. Returns (platform_name, campaign) or
-    (None, None) if nothing is available anywhere."""
+    """Checks Vyro first, then Whop. Skips any campaign that fails the AI
+    quality screen and tries the other platform instead. Returns
+    (platform_name, campaign) or (None, None) if nothing usable exists
+    anywhere right now."""
     try:
         vyro_campaign = vyro_run_check()
     except VyroClientError as exc:
         print(f"Vyro check failed: {exc}", file=sys.stderr)
         vyro_campaign = None
 
-    if vyro_campaign is not None:
+    if vyro_campaign is not None and _screen_campaign("vyro", vyro_campaign):
         return "vyro", vyro_campaign
 
     try:
@@ -101,7 +124,7 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
         print(f"Whop check failed: {exc}", file=sys.stderr)
         whop_campaign = None
 
-    if whop_campaign is not None:
+    if whop_campaign is not None and _screen_campaign("whop", whop_campaign):
         return "whop", whop_campaign
 
     return None, None
@@ -116,13 +139,53 @@ def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
         raise ValueError(f"Unknown platform: {platform}")
 
 
-def process_campaign(platform: str, campaign: Campaign) -> int:
+def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
+    """Tries the AI parser first (handles any language/format); falls back
+    to the regex-based parser in requirements_parser.py if the API call
+    fails, so a bad API day never blocks the pipeline."""
+    raw_text = campaign.requirements_text or campaign.name
     try:
-        req = parse_campaign(campaign.requirements_text or campaign.name)
+        parsed = ai_parse_requirements(raw_text)
+        req = CampaignRequirements(
+            campaign_id=campaign.campaign_id,
+            mandatory_hashtags=parsed.mandatory_hashtags,
+            required_links=parsed.required_links,
+            min_seconds=parsed.min_seconds,
+            max_seconds=parsed.max_seconds,
+            referral_code=parsed.referral_code,
+            watermark_text=parsed.watermark_text,
+            raw_source=raw_text,
+        )
+        req.validate()
+        if parsed.notes:
+            print(f"AI parser note: {parsed.notes}")
+        return req
+    except (AIBrainError, RequirementsParseError) as exc:
+        print(f"AI requirements parsing failed ({exc}); falling back to regex parser.", file=sys.stderr)
+        req = parse_campaign(raw_text)
         req.campaign_id = campaign.campaign_id
-    except RequirementsParseError as exc:
-        print(f"Requirements parsing failed: {exc}", file=sys.stderr)
-        return 1
+        return req
+
+
+def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> VideoMetadata:
+    """Tries the AI metadata writer first; falls back to the template
+    version in metadata.py if the API call fails."""
+    try:
+        ai_meta = ai_generate_metadata(
+            hook=hook,
+            summary=summary,
+            mandatory_hashtags=req.mandatory_hashtags,
+            required_links=req.required_links,
+            referral_code=req.referral_code,
+        )
+        return VideoMetadata(title=ai_meta.title, description=ai_meta.description, tags=ai_meta.hashtags)
+    except (AIBrainError, MetadataError) as exc:
+        print(f"AI metadata generation failed ({exc}); falling back to template.", file=sys.stderr)
+        return generate_metadata(hook=hook, summary=summary, req=req)
+
+
+def process_campaign(platform: str, campaign: Campaign) -> int:
+    req = _parse_requirements(campaign)
 
     try:
         _download_source_clip(campaign.source_clip_url, SOURCE_CLIP_PATH)
@@ -142,11 +205,7 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
 
-        meta = generate_metadata(
-            hook=hook,
-            summary=(campaign.requirements_text or "")[:200],
-            req=req,
-        )
+        meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")
 
         validate_or_raise(
@@ -167,9 +226,6 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
         print(f"[4/5] Uploaded to YouTube: {result.video_url}")
     except RenderError as exc:
         print(f"Rendering failed: {exc}", file=sys.stderr)
-        return 1
-    except MetadataError as exc:
-        print(f"Metadata generation failed: {exc}", file=sys.stderr)
         return 1
     except ValidationError as exc:
         print(str(exc), file=sys.stderr)
@@ -210,7 +266,7 @@ def main() -> int:
     platform, campaign = _find_campaign()
 
     if campaign is None:
-        print("No active campaign today on Vyro or Whop. Exiting.")
+        print("No usable active campaign today on Vyro or Whop. Exiting.")
         return 0
 
     if campaign.campaign_id in processed:

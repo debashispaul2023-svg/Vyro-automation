@@ -119,9 +119,22 @@ def _new_context_with_session(browser: Browser) -> BrowserContext:
     return context
 
 
+def _settle(page: Page) -> None:
+    """Waits for the page's initial HTML to load (required), then makes a
+    best-effort attempt to wait for network activity to quiet down. Modern
+    dashboards often have background polling/analytics that never truly go
+    idle, so a networkidle timeout here is NOT treated as an error — we
+    just proceed with whatever's on the page already."""
+    page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+    try:
+        page.wait_for_load_state("networkidle", timeout=4000)
+    except PlaywrightTimeoutError:
+        pass
+
+
 def _ensure_logged_in(page: Page, target_url: str) -> None:
     page.goto(target_url, timeout=DEFAULT_TIMEOUT_MS)
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    _settle(page)
 
     title = (page.title() or "").lower()
     if "just a moment" in title or "attention required" in title:
@@ -154,7 +167,7 @@ def check_for_campaign(page: Page) -> Optional[WhopCampaign]:
         return None
 
     campaign_card.click()
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    _settle(page)
 
     try:
         name = (page.text_content('[data-testid="campaign-name"]') or "").strip() or "unknown"
@@ -219,7 +232,7 @@ def submit_video_link(page: Page, campaign: WhopCampaign, video_url: str) -> Non
         if not clicked:
             raise WhopClientError("Could not find the submit button on the submission form.")
 
-        page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+        _settle(page)
     except WhopClientError:
         raise
     except PlaywrightTimeoutError as exc:

@@ -201,6 +201,30 @@ active campaign Whop-এ নেই দেখার জন্য। ক্যা�
 যেখানে campaign পাবে সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক
 সাবমিট করবে।
 
+## ধাপ ৮: AI Brain সেটআপ (Claude API)
+
+এখন থেকে টেমপ্লেটের বদলে Claude AI দিয়ে requirement বোঝা, title/caption
+লেখা, আর campaign-এর মান যাচাই করা হবে। খরচ খুবই কম (সস্তা "Haiku" মডেল
+ব্যবহার হচ্ছে) — প্রতিদিনের এই ছোট কাজের জন্য মাসে সম্ভবত কয়েক টাকার বেশি
+হবে না, তবে নিশ্চিত হতে [console.anthropic.com](https://console.anthropic.com)-এ pricing দেখে নিও।
+
+**সেটআপ:**
+1. [console.anthropic.com](https://console.anthropic.com)-এ অ্যাকাউন্ট বানাও/লগইন করো
+2. Billing-এ গিয়ে সামান্য কিছু ক্রেডিট যোগ করো (শুরুতে $5 যথেষ্ট, এই ব্যবহারে অনেক দিন চলবে)
+3. **API Keys** সেকশনে গিয়ে নতুন একটা key বানাও
+4. GitHub secret যোগ করো:
+   - Name: `ANTHROPIC_API_KEY`
+   - Value: এইমাত্র বানানো key
+
+**AI brain যা করবে (`ai_brain.py`):**
+- **Requirement parsing** — যেকোনো ভাষা/ফরম্যাটে লেখা ক্যাম্পেইন নিয়ম বুঝে হ্যাশট্যাগ/লিংক/duration/referral code বের করবে (আগের রেজেক্স-বেসড পার্সার এখন শুধু fallback হিসেবে থাকবে, AI ব্যর্থ হলে সেটা ব্যবহার হবে)
+- **Metadata generation** — টেমপ্লেটের বদলে সত্যিকারের আকর্ষণীয় title/description/caption লিখবে, কিন্তু বাধ্যতামূলক hashtag/link ঠিকই থাকবে নিশ্চিত করা হয় (safety-check করে)
+- **Campaign quality screening** — নতুন ক্যাম্পেইন পেলে প্রথমে AI দিয়ে যাচাই করবে সেটা legit মনে হচ্ছে কিনা (অস্পষ্ট/সন্দেহজনক শর্ত থাকলে স্কিপ করে অন্য প্ল্যাটফর্ম ট্রাই করবে — Vyro-তে খারাপ ক্যাম্পেইন পেলে Whop চেক করবে, বা উল্টো)
+
+**এখনো বানানো হয়নি (পরের ধাপে):**
+- Video থেকে automatically সেরা মুহূর্ত বেছে ক্লিপ করা (transcript লাগবে, আলাদা বড় কাজ)
+- Comment-এ AI দিয়ে auto-reply
+
 ## গুরুত্বপূর্ণ সতর্কতা
 - Vyro-তে bot দিয়ে auto-login/auto-submit করা তাদের Terms of Service ভঙ্গ করতে পারে। এটা সম্পূর্ণ তোমার নিজের অ্যাকাউন্ট, নিজের ঝুঁকি — Vyro-র ToS একবার পড়ে নেওয়া ভালো।
 - `vyro_client.py`-এর selector গুলো Vyro তাদের ওয়েবসাইট রিডিজাইন করলে ভেঙে যেতে পারে — তখন আবার ধাপ ০ রিপিট করতে হবে।

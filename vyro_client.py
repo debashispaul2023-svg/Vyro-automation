@@ -155,11 +155,24 @@ def _new_context_with_session(browser: Browser) -> BrowserContext:
     return context
 
 
+def _settle(page: Page) -> None:
+    """Waits for the page's initial HTML to load (required), then makes a
+    best-effort attempt to wait for network activity to quiet down. Modern
+    dashboards often have background polling/analytics that never truly go
+    idle, so a networkidle timeout here is NOT treated as an error — we
+    just proceed with whatever's on the page already."""
+    page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+    try:
+        page.wait_for_load_state("networkidle", timeout=4000)
+    except PlaywrightTimeoutError:
+        pass
+
+
 def _ensure_logged_in(page: Page, target_url: str) -> None:
     """Navigates to target_url and confirms the session cookie actually
     logged us in (i.e. Vyro didn't bounce us back to /login)."""
     page.goto(target_url, timeout=DEFAULT_TIMEOUT_MS)
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    _settle(page)
 
     if "/login" in page.url or "get-started" in page.url.lower():
         raise VyroSessionExpired(
@@ -185,7 +198,7 @@ def check_for_campaign(page: Page) -> Optional[VyroCampaign]:
         return None  # no active campaign right now — this is a NORMAL, expected result
 
     campaign_card.click()
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    _settle(page)
 
     try:
         # TODO: replace with the real selectors on the campaign detail page
@@ -237,7 +250,7 @@ def submit_video_link(page: Page, campaign: VyroCampaign, video_url: str) -> Non
             ],
             "submit",
         )
-        page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+        _settle(page)
     except VyroClientError:
         raise
     except PlaywrightTimeoutError as exc:
