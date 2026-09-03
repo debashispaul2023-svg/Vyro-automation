@@ -1,32 +1,14 @@
 """
 ai_brain.py
 
-The "AI brain" for this automation — wraps the Anthropic Claude API
-(model: claude-haiku-4-5, the cheapest current tier — this is light text
-work, not heavy reasoning, so Haiku is the right choice both for cost and
-speed) for three jobs:
+The "AI brain" for this automation — wraps the Google Gemini API
+(model: gemini-2.5-flash) for three jobs:
 
-  1. ai_parse_requirements() — reads a campaign's requirement text in ANY
-     language or format (a sentence, a bullet list, broken English/Bengali
-     mixed, whatever) and extracts structured rules: hashtags, links,
-     duration range, referral code, watermark text. This replaces/backs up
-     requirements_parser.py's regex-based parse_from_text_prompt(), which
-     only handles fairly clean English phrasing.
+  1. ai_parse_requirements() — extracts structured rules from text.
+  2. ai_generate_metadata() — writes title/description/caption tailored to clip.
+  3. ai_score_campaign() — sanity-checks if a campaign is legitimate.
 
-  2. ai_generate_metadata() — writes an actual catchy title/description/
-     caption/hashtag set tailored to the clip's content, instead of the
-     fixed template in metadata.py. Falls back to the template version if
-     the API call fails, so a bad API day never blocks the whole pipeline.
-
-  3. ai_score_campaign() — before spending time downloading/rendering/
-     uploading, asks Claude to sanity-check whether a campaign's
-     requirements look legitimate (clear payout terms, reasonable content
-     rules) vs. low-quality or scam-like (vague/contradictory rules, asks
-     for personal/financial info it shouldn't, unrealistic promises). Used
-     by daily_runner.py to skip bad campaigns and try the other platform
-     instead of wasting a full render+upload cycle on a dead end.
-
-Required environment variable: ANTHROPIC_API_KEY
+Required environment variable: GEMINI_API_KEY
 """
 
 from __future__ import annotations
@@ -37,26 +19,30 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import anthropic
+import google.generativeai as genai
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 1024
+MODEL_NAME = "gemini-2.5-flash"
 
 
 class AIBrainError(Exception):
-    """Raised when a Claude call fails and there is no safe fallback."""
+    """Raised when a Gemini call fails and there is no safe fallback."""
 
 
-def _client() -> anthropic.Anthropic:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+def _get_model() -> genai.GenerativeModel:
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise AIBrainError("ANTHROPIC_API_KEY environment variable is not set.")
-    return anthropic.Anthropic(api_key=api_key)
+        raise AIBrainError("GEMINI_API_KEY environment variable is not set.")
+    
+    genai.configure(api_key=api_key)
+    # Using JSON response mime type to guarantee structured output
+    return genai.GenerativeModel(
+        model_name=MODEL_NAME,
+        generation_config={"response_mime_type": "application/json"}
+    )
 
 
 def _extract_json(text: str) -> dict:
-    """Claude sometimes wraps JSON in ```json fences despite instructions —
-    strip those before parsing."""
+    """Fallback cleaner in case markdown fences are still returned."""
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
     return json.loads(cleaned)
 
@@ -73,7 +59,7 @@ class ParsedRequirements:
     max_seconds: float = 60.0
     referral_code: Optional[str] = None
     watermark_text: Optional[str] = None
-    notes: str = ""  # anything unusual the AI flagged for a human to see
+    notes: str = ""
 
 
 _REQUIREMENTS_PROMPT = """\
@@ -81,8 +67,7 @@ You will be given the raw requirements text for a video-clipping campaign, \
 possibly in Bengali, English, a mix, or broken grammar. Extract the actual \
 rules a video clipper must follow.
 
-Respond with ONLY a JSON object (no markdown fences, no preamble), matching \
-exactly this shape:
+Respond with ONLY a JSON object matching exactly this shape:
 {{
   "mandatory_hashtags": ["#example"],
   "required_links": ["https://..."],
@@ -107,17 +92,12 @@ def ai_parse_requirements(raw_text: str) -> ParsedRequirements:
     if not raw_text or not raw_text.strip():
         raise AIBrainError("Empty requirements text.")
 
-    client = _client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": _REQUIREMENTS_PROMPT.format(text=raw_text)}],
-    )
-    text = response.content[0].text
+    model = _get_model()
     try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise AIBrainError(f"Could not parse Claude's JSON response: {exc}\nRaw: {text}") from exc
+        response = model.generate_content(_REQUIREMENTS_PROMPT.format(text=raw_text))
+        data = _extract_json(response.text)
+    except Exception as exc:
+        raise AIBrainError(f"Could not parse Gemini's response: {exc}") from exc
 
     return ParsedRequirements(
         mandatory_hashtags=[h if h.startswith("#") else f"#{h}" for h in data.get("mandatory_hashtags", [])],
@@ -153,12 +133,12 @@ Mandatory hashtags (MUST all appear, do not change or drop any): {hashtags}
 Mandatory links (MUST appear in the description, verbatim): {links}
 Referral code (if any, mention it naturally): {referral_code}
 
-Respond with ONLY a JSON object (no markdown fences, no preamble):
+Respond with ONLY a JSON object:
 {{
   "title": "YouTube title, under 100 characters, MUST end with the mandatory hashtags then #shorts",
   "description": "YouTube description, 2-4 short lines, MUST include every mandatory link verbatim and the referral code if given",
   "hashtags": ["#tag1", "#tag2"],
-  "instagram_caption": "A separate short Instagram caption, can be more casual/emoji-friendly, MUST also include the mandatory hashtags"
+  "instagram_caption": "A separate short Instagram caption, MUST also include the mandatory hashtags"
 }}
 """
 
@@ -170,7 +150,7 @@ def ai_generate_metadata(
     required_links: list[str],
     referral_code: Optional[str],
 ) -> AIMetadata:
-    client = _client()
+    model = _get_model()
     prompt = _METADATA_PROMPT.format(
         hook=hook,
         summary=summary or "(no summary provided)",
@@ -178,24 +158,18 @@ def ai_generate_metadata(
         links=", ".join(required_links) or "(none)",
         referral_code=referral_code or "(none)",
     )
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = response.content[0].text
+    
     try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise AIBrainError(f"Could not parse Claude's JSON response: {exc}\nRaw: {text}") from exc
+        response = model.generate_content(prompt)
+        data = _extract_json(response.text)
+    except Exception as exc:
+        raise AIBrainError(f"Could not parse Gemini's response: {exc}") from exc
 
-    # Safety net: verify mandatory links/hashtags actually made it in. If
-    # Claude dropped one, append it rather than silently violating the
-    # campaign's rules (which could get the submission rejected).
     description = data.get("description", "") or ""
     for link in required_links:
         if link not in description:
             description += f"\n{link}"
+            
     title = data.get("title", "") or hook
     for tag in mandatory_hashtags:
         if tag.lower() not in title.lower():
@@ -222,18 +196,15 @@ class CampaignScore:
 _SCORE_PROMPT = """\
 You are screening a video-clipping campaign brief before a creator commits \
 time to it. Flag it as LOW QUALITY if it shows signs of being a scam or \
-not worth the effort: vague or contradictory rules, asks for sensitive \
-personal/financial information beyond a normal payout method, promises \
-unrealistic payouts, has no clear content/duration rules at all, or reads \
-as spam/gibberish. Otherwise mark it GOOD — normal campaigns with clear \
-(even strict) rules are fine, being strict is not the same as being a scam.
+not worth the effort: vague rules, asks for sensitive info, promises \
+unrealistic payouts, or reads as gibberish. Otherwise mark it GOOD.
 
 Campaign requirements text:
 \"\"\"
 {text}
 \"\"\"
 
-Respond with ONLY a JSON object (no markdown fences, no preamble):
+Respond with ONLY a JSON object:
 {{"is_good": true or false, "reason": "one short sentence explaining why"}}
 """
 
@@ -242,19 +213,11 @@ def ai_score_campaign(raw_text: str) -> CampaignScore:
     if not raw_text or not raw_text.strip():
         return CampaignScore(is_good=False, reason="Empty requirements text.")
 
-    client = _client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=256,
-        messages=[{"role": "user", "content": _SCORE_PROMPT.format(text=raw_text)}],
-    )
-    text = response.content[0].text
+    model = _get_model()
     try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        # If scoring itself fails, don't block the pipeline over it — treat
-        # as "good" and let the normal requirements parser/validator catch
-        # any real problems downstream.
+        response = model.generate_content(_SCORE_PROMPT.format(text=raw_text))
+        data = _extract_json(response.text)
+    except Exception as exc:
         return CampaignScore(is_good=True, reason=f"Scoring unavailable ({exc}), proceeding by default.")
 
     return CampaignScore(is_good=bool(data.get("is_good", True)), reason=data.get("reason", ""))
@@ -262,7 +225,6 @@ def ai_score_campaign(raw_text: str) -> CampaignScore:
 
 if __name__ == "__main__":
     import sys
-
     if len(sys.argv) < 2:
         print("Usage: python ai_brain.py <parse|score> <text>")
         sys.exit(1)
@@ -274,5 +236,3 @@ if __name__ == "__main__":
         print(ai_parse_requirements(sample_text))
     elif mode == "score":
         print(ai_score_campaign(sample_text))
-    else:
-        print("Unknown mode. Use 'parse' or 'score'.")
