@@ -189,17 +189,37 @@ Whop-এ Google দিয়ে লগইন করো বলে সরাসর
 
 **⚠️ সম্ভাব্য সমস্যা:** এই cookie-গুলোর একটা (`cf_clearance`) Cloudflare-এর
 bot-protection pass-token, যেটা তোমার নির্দিষ্ট IP-র সাথে বাঁধা থাকতে পারে।
-GitHub Actions সার্ভার ভিন্ন IP থেকে চলে বলে এটা কাজ নাও করতে পারে — চেষ্টা
-করে দেখব, না হলে ভিন্ন সমাধান (residential proxy ইত্যাদি) লাগবে।
+GitHub Actions সার্ভার ভিন্ন IP থেকে চলে বলে এটা কাজ নাও করতে পারে।
 
-**⚠️ campaign scraping এখনো অসম্পূর্ণ:** `whop_client.py`-তে ক্যাম্পেইন
-কার্ড/ফর্মের selector গুলো এখনো placeholder (`# TODO`), কারণ এখনো কোনো
-active campaign Whop-এ নেই দেখার জন্য। ক্যাম্পেইন এলে DevTools স্ক্রিনশট
-পাঠালে সেগুলো ঠিক করে দেওয়া হবে (Vyro-র জন্য যেভাবে করা হয়েছিল)।
+**⚠️ গুরুত্বপূর্ণ — Whop-এ কোনো "My Campaigns" পেজ নেই:**
+প্রতিটা joined ক্যাম্পেইনের নিজস্ব URL থাকে, একসাথে লিস্ট দেখার কোনো পেজ
+Whop-এ নেই। তাই তুমি যেসব ক্যাম্পেইনে join করেছ, সেগুলোর URL
+**`whop_campaigns.json`** ফাইলে ম্যানুয়ালি যোগ করে দিতে হবে:
 
-`daily_runner.py` এখন প্রথমে Vyro চেক করবে, কিছু না পেলে Whop-ও চেক করবে,
-যেখানে campaign পাবে সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক
-সাবমিট করবে।
+```json
+{
+  "joined_campaign_urls": [
+    "https://whop.com/creator-name/exp_xxx/app/campaigns/xxx/",
+    "আরও একটা ক্যাম্পেইনের URL এখানে যোগ করো"
+  ]
+}
+```
+
+নতুন কোনো ক্যাম্পেইনে join করলেই এই ফাইলে ওই ক্যাম্পেইনের URL যোগ করে
+GitHub-এ commit করে দিও — bot প্রতিদিন এই লিস্টের প্রতিটা URL চেক করবে।
+
+**⚠️ কিছু ক্যাম্পেইনে সরাসরি ক্লিপ দেওয়া থাকে না, Google Doc-এ থাকে:**
+অনেক Whop ক্যাম্পেইন ("Post clip... Please refer to Google Doc for
+requirements") আসল ফুটেজ/নিয়ম একটা external Google Doc-এ রাখে। bot এখন
+`google_doc_reader.py` দিয়ে সেই Doc পড়ে সেখান থেকে ভিডিও লিংক (Drive/
+YouTube/Dropbox ইত্যাদি) বের করার চেষ্টা করবে। **শর্ত:** ওই Google Doc-টা
+অবশ্যই "Anyone with the link can view" হিসেবে শেয়ার করা থাকতে হবে,
+নাহলে bot পড়তে পারবে না।
+
+`daily_runner.py` এখন প্রথমে Vyro চেক করবে, কিছু না পেলে
+`whop_campaigns.json`-এর প্রতিটা ক্যাম্পেইন চেক করবে (region-locked বা
+budget শেষ হয়ে যাওয়া ক্যাম্পেইন এড়িয়ে যাবে), যেখানে valid campaign পাবে
+সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক সাবমিট করবে।
 
 ## ধাপ ৮: AI Brain সেটআপ (Claude API)
 

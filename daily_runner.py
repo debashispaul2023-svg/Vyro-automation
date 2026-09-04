@@ -4,20 +4,22 @@ daily_runner.py
 Fully-automated entrypoint, meant to run on a daily schedule (GitHub Actions
 cron — see .github/workflows/vyro_daily.yml):
 
-  1. Check Vyro for an active campaign. If none (or it's low-quality per the
-     AI screen), check Whop too.
+  1. Check Vyro for an active campaign. If none (or it fails the AI quality
+     screen), check every Whop campaign listed in whop_campaigns.json.
   2. Ask ai_brain to sanity-check the campaign's requirements — skip and try
      the other platform if it looks like a scam/low-effort listing.
-  3. Skip cleanly if nothing found anywhere, or if the found campaign_id was
-     already processed before (tracked in processed_campaigns.json)
-  4. Download the campaign's source clip
-  5. Parse requirements with AI (falls back to regex parsing if the API
-     call fails) -> render vertical short -> generate AI-written metadata
-     (falls back to the template version on API failure) -> validate ->
-     upload to YouTube -> upload to Instagram Reels
-  6. Submit the resulting YouTube link back to whichever platform (Vyro or
-     Whop) the campaign came from
-  7. Record the campaign_id as processed, so it's never submitted twice
+  3. Skip cleanly if nothing usable found anywhere, or if the found
+     campaign_id was already processed before (processed_campaigns.json).
+  4. Resolve the source clip: some campaigns give a direct clip link
+     (Vyro); some (many Whop ones) point to an external Google Doc that
+     contains the real footage links — resolve that first if needed.
+  5. Parse requirements with AI (falls back to regex parsing on failure) ->
+     render vertical short -> generate AI-written metadata (falls back to
+     the template on failure) -> validate -> upload to YouTube -> upload to
+     Instagram Reels.
+  6. Submit the resulting link back to whichever platform the campaign
+     came from.
+  7. Record the campaign_id as processed, so it's never submitted twice.
 
 Usage (locally or in CI):
     python daily_runner.py
@@ -35,6 +37,7 @@ import requests
 
 from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
 from checker import ValidationError, validate_or_raise
+from google_doc_reader import GoogleDocReadError, fetch_google_doc_text, find_candidate_source_clips
 from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
@@ -43,8 +46,8 @@ from vyro_client import VyroCampaign, VyroClientError
 from vyro_client import run_check as vyro_run_check
 from vyro_client import run_submit as vyro_run_submit
 from whop_client import WhopCampaign, WhopClientError
-from whop_client import run_check as whop_run_check
-from whop_client import run_submit as whop_run_submit
+from whop_client import check_configured_campaigns as whop_check_configured_campaigns
+from whop_client import submit_video_link as whop_submit_video_link
 from youtube_uploader import UploadError, upload_video
 
 PROCESSED_LOG_PATH = "processed_campaigns.json"
@@ -69,8 +72,8 @@ def _save_processed(processed: set[str]) -> None:
 def _download_source_clip(url: str, dest_path: str) -> None:
     """
     Downloads the campaign's source clip. Tries yt-dlp first (handles
-    YouTube and most video hosts); falls back to a plain HTTP GET for
-    direct file links (Google Drive direct-download, S3, CDN links, etc).
+    YouTube, Google Drive, and most video hosts); falls back to a plain
+    HTTP GET for direct file links.
     """
     os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
 
@@ -89,6 +92,45 @@ def _download_source_clip(url: str, dest_path: str) -> None:
             f.write(chunk)
 
 
+def _resolve_source_clip(campaign: Campaign) -> str:
+    """Returns a downloadable URL for the campaign's source footage. If the
+    campaign already has one (Vyro's usual case), use it directly. If it's
+    empty but the campaign links an external Google Doc (common on Whop),
+    fetch that doc and pull the first candidate video link out of it."""
+    if campaign.source_clip_url:
+        return campaign.source_clip_url
+
+    reference_doc_url = getattr(campaign, "reference_doc_url", None)
+    if not reference_doc_url:
+        raise RuntimeError(
+            "No source clip URL and no reference document to resolve one "
+            "from. This campaign may require footage you have to record/"
+            "provide yourself, which this pipeline doesn't handle yet."
+        )
+
+    try:
+        doc_text = fetch_google_doc_text(reference_doc_url)
+    except GoogleDocReadError as exc:
+        raise RuntimeError(f"Could not read the campaign's reference document: {exc}") from exc
+
+    candidates = find_candidate_source_clips(doc_text)
+    if not candidates:
+        raise RuntimeError(
+            "The campaign's reference document didn't contain any "
+            "recognizable footage link (Drive/YouTube/Dropbox/etc)."
+        )
+
+    # Try each candidate until one actually downloads successfully.
+    for candidate_url in candidates:
+        try:
+            _download_source_clip(candidate_url, SOURCE_CLIP_PATH)
+            return candidate_url
+        except Exception:  # noqa: BLE001
+            continue
+
+    raise RuntimeError("None of the candidate footage links in the reference document could be downloaded.")
+
+
 def _screen_campaign(platform: str, campaign: Campaign) -> bool:
     """Returns True if the campaign passes the AI quality screen (or the
     screen itself is unavailable, in which case we don't block on it)."""
@@ -105,10 +147,8 @@ def _screen_campaign(platform: str, campaign: Campaign) -> bool:
 
 
 def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
-    """Checks Vyro first, then Whop. Skips any campaign that fails the AI
-    quality screen and tries the other platform instead. Returns
-    (platform_name, campaign) or (None, None) if nothing usable exists
-    anywhere right now."""
+    """Checks Vyro first, then every configured Whop campaign. Skips any
+    campaign that fails the AI quality screen and tries the next source."""
     try:
         vyro_campaign = vyro_run_check()
     except VyroClientError as exc:
@@ -119,7 +159,7 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
         return "vyro", vyro_campaign
 
     try:
-        whop_campaign = whop_run_check()
+        whop_campaign = whop_check_configured_campaigns()
     except WhopClientError as exc:
         print(f"Whop check failed: {exc}", file=sys.stderr)
         whop_campaign = None
@@ -134,15 +174,12 @@ def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
     if platform == "vyro":
         vyro_run_submit(campaign, video_url)
     elif platform == "whop":
-        whop_run_submit(campaign, video_url)
+        whop_submit_video_link(campaign, video_url)
     else:
         raise ValueError(f"Unknown platform: {platform}")
 
 
 def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
-    """Tries the AI parser first (handles any language/format); falls back
-    to the regex-based parser in requirements_parser.py if the API call
-    fails, so a bad API day never blocks the pipeline."""
     raw_text = campaign.requirements_text or campaign.name
     try:
         parsed = ai_parse_requirements(raw_text)
@@ -168,8 +205,6 @@ def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
 
 
 def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> VideoMetadata:
-    """Tries the AI metadata writer first; falls back to the template
-    version in metadata.py if the API call fails."""
     try:
         ai_meta = ai_generate_metadata(
             hook=hook,
@@ -188,10 +223,10 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
     req = _parse_requirements(campaign)
 
     try:
-        _download_source_clip(campaign.source_clip_url, SOURCE_CLIP_PATH)
-        print(f"[1/5] Downloaded source clip -> {SOURCE_CLIP_PATH}")
+        resolved_source = _resolve_source_clip(campaign)
+        print(f"[1/5] Resolved + downloaded source clip from {resolved_source} -> {SOURCE_CLIP_PATH}")
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to download source clip: {exc}", file=sys.stderr)
+        print(f"Failed to resolve/download source clip: {exc}", file=sys.stderr)
         return 1
 
     hook = campaign.name or "New campaign clip"
@@ -242,8 +277,6 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
         )
         print(f"[5/5] Uploaded to Instagram Reels: {instagram_media_id}")
     except InstagramUploadError as exc:
-        # Instagram is a bonus channel — don't fail the whole run if only
-        # this step breaks, since YouTube already succeeded.
         print(f"Instagram upload failed (continuing anyway): {exc}", file=sys.stderr)
 
     try:
