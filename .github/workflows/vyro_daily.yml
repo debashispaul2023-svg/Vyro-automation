@@ -45,7 +45,7 @@ jobs:
           IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
           ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
           ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact (if any)
