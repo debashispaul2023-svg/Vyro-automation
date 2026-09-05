@@ -221,25 +221,29 @@ YouTube/Dropbox ইত্যাদি) বের করার চেষ্টা
 budget শেষ হয়ে যাওয়া ক্যাম্পেইন এড়িয়ে যাবে), যেখানে valid campaign পাবে
 সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক সাবমিট করবে।
 
-## ধাপ ৮: AI Brain সেটআপ (Claude API)
+## ধাপ ৮: AI Brain সেটআপ (Gemini API — ফ্রি)
 
-এখন থেকে টেমপ্লেটের বদলে Claude AI দিয়ে requirement বোঝা, title/caption
-লেখা, আর campaign-এর মান যাচাই করা হবে। খরচ খুবই কম (সস্তা "Haiku" মডেল
-ব্যবহার হচ্ছে) — প্রতিদিনের এই ছোট কাজের জন্য মাসে সম্ভবত কয়েক টাকার বেশি
-হবে না, তবে নিশ্চিত হতে [console.anthropic.com](https://console.anthropic.com)-এ pricing দেখে নিও।
+এখন থেকে টেমপ্লেটের বদলে Google Gemini AI দিয়ে requirement বোঝা, title/caption
+লেখা, আর campaign-এর মান যাচাই করা হবে। **সম্পূর্ণ ফ্রি** — Gemini-র Flash
+মডেল ফ্রি টায়ারে পাওয়া যায় (rate limit সহ), প্রতিদিনের এই অল্প কাজে সেই
+লিমিটই যথেষ্ট।
 
 **সেটআপ:**
-1. [console.anthropic.com](https://console.anthropic.com)-এ অ্যাকাউন্ট বানাও/লগইন করো
-2. Billing-এ গিয়ে সামান্য কিছু ক্রেডিট যোগ করো (শুরুতে $5 যথেষ্ট, এই ব্যবহারে অনেক দিন চলবে)
-3. **API Keys** সেকশনে গিয়ে নতুন একটা key বানাও
-4. GitHub secret যোগ করো:
-   - Name: `ANTHROPIC_API_KEY`
+1. [aistudio.google.com/apikey](https://aistudio.google.com/apikey)-এ যাও, Google অ্যাকাউন্ট দিয়ে লগইন করো
+2. **"Create API key"** চাপো, নতুন key বানাও
+3. GitHub secret যোগ করো:
+   - Name: `GEMINI_API_KEY`
    - Value: এইমাত্র বানানো key
 
 **AI brain যা করবে (`ai_brain.py`):**
 - **Requirement parsing** — যেকোনো ভাষা/ফরম্যাটে লেখা ক্যাম্পেইন নিয়ম বুঝে হ্যাশট্যাগ/লিংক/duration/referral code বের করবে (আগের রেজেক্স-বেসড পার্সার এখন শুধু fallback হিসেবে থাকবে, AI ব্যর্থ হলে সেটা ব্যবহার হবে)
 - **Metadata generation** — টেমপ্লেটের বদলে সত্যিকারের আকর্ষণীয় title/description/caption লিখবে, কিন্তু বাধ্যতামূলক hashtag/link ঠিকই থাকবে নিশ্চিত করা হয় (safety-check করে)
 - **Campaign quality screening** — নতুন ক্যাম্পেইন পেলে প্রথমে AI দিয়ে যাচাই করবে সেটা legit মনে হচ্ছে কিনা (অস্পষ্ট/সন্দেহজনক শর্ত থাকলে স্কিপ করে অন্য প্ল্যাটফর্ম ট্রাই করবে — Vyro-তে খারাপ ক্যাম্পেইন পেলে Whop চেক করবে, বা উল্টো)
+
+**গুরুত্বপূর্ণ:** ফ্রি টায়ারের rate limit থাকায় (প্রতি মিনিটে/দিনে সীমিত
+রিকোয়েস্ট), যদি একই দিনে বারবার ম্যানুয়ালি workflow রান করো তাহলে মাঝে মাঝে
+limit ছুঁয়ে যেতে পারে — তখন AI ব্যর্থ হয়ে টেমপ্লেট/regex fallback ব্যবহার
+হবে (পাইপলাইন থেমে যাবে না, শুধু কম "স্মার্ট" আউটপুট আসবে)।
 
 **এখনো বানানো হয়নি (পরের ধাপে):**
 - Video থেকে automatically সেরা মুহূর্ত বেছে ক্লিপ করা (transcript লাগবে, আলাদা বড় কাজ)

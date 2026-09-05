@@ -164,26 +164,41 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
     # Campaign name: try the largest heading-like text near the top —
     # resilient fallback is just the page title.
     name = (page.title() or "").split("|")[0].strip() or "Whop campaign"
+    try:
+        heading = page.get_by_role("heading").first.inner_text(timeout=2000)
+        if heading and len(heading.strip()) > 3:
+            name = heading.strip()
+    except Exception:  # noqa: BLE001
+        pass
 
     # Reference material link (e.g. an external Google Doc with the real
-    # requirements + footage). Look for a link near the words "Reference"
-    # or "Dos" — resilient text-based search rather than a guessed CSS class.
+    # requirements + footage). On Whop this is often NOT a real <a href> —
+    # it's a clickable card that opens a new tab via JS. So: try a normal
+    # href scan first (cheap), and if that finds nothing, click the card
+    # and capture whichever URL the resulting new tab lands on.
     reference_doc_url = None
     try:
-        link_locator = page.get_by_role("link").filter(has_text=re.compile(r"edit\?usp=sharing|docs\.google|drive\.google", re.I))
-        if link_locator.count() > 0:
-            reference_doc_url = link_locator.first.get_attribute("href")
+        all_links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        for href in all_links:
+            if "docs.google.com" in href or "drive.google.com" in href:
+                reference_doc_url = href
+                break
     except Exception:  # noqa: BLE001
         pass
 
     if not reference_doc_url:
-        # Fall back to scanning all links on the page for a Google Docs/Drive URL.
         try:
-            all_links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            for href in all_links:
-                if "docs.google.com" in href or "drive.google.com" in href:
-                    reference_doc_url = href
-                    break
+            reference_card = page.get_by_text(
+                re.compile(r"edit\?usp=sharing|reference materials|dos and don", re.I)
+            ).first
+            with page.context.expect_page(timeout=5000) as new_page_info:
+                reference_card.click(timeout=3000)
+            new_page = new_page_info.value
+            new_page.wait_for_load_state("domcontentloaded", timeout=8000)
+            candidate_url = new_page.url
+            if "docs.google.com" in candidate_url or "drive.google.com" in candidate_url:
+                reference_doc_url = candidate_url
+            new_page.close()
         except Exception:  # noqa: BLE001
             pass
 

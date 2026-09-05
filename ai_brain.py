@@ -1,32 +1,29 @@
 """
 ai_brain.py
 
-The "AI brain" for this automation — wraps the Anthropic Claude API
-(model: claude-haiku-4-5, the cheapest current tier — this is light text
-work, not heavy reasoning, so Haiku is the right choice both for cost and
-speed) for three jobs:
+The "AI brain" for this automation — wraps the Google Gemini API (model:
+gemini-2.5-flash, which is free-tier as of writing — light text work like
+this doesn't need a paid/Pro model) for three jobs:
 
   1. ai_parse_requirements() — reads a campaign's requirement text in ANY
-     language or format (a sentence, a bullet list, broken English/Bengali
-     mixed, whatever) and extracts structured rules: hashtags, links,
-     duration range, referral code, watermark text. This replaces/backs up
-     requirements_parser.py's regex-based parse_from_text_prompt(), which
-     only handles fairly clean English phrasing.
+     language or format and extracts structured rules: hashtags, links,
+     duration range, referral code, watermark text.
 
   2. ai_generate_metadata() — writes an actual catchy title/description/
      caption/hashtag set tailored to the clip's content, instead of the
      fixed template in metadata.py. Falls back to the template version if
-     the API call fails, so a bad API day never blocks the whole pipeline.
+     the API call fails.
 
-  3. ai_score_campaign() — before spending time downloading/rendering/
-     uploading, asks Claude to sanity-check whether a campaign's
-     requirements look legitimate (clear payout terms, reasonable content
-     rules) vs. low-quality or scam-like (vague/contradictory rules, asks
-     for personal/financial info it shouldn't, unrealistic promises). Used
-     by daily_runner.py to skip bad campaigns and try the other platform
-     instead of wasting a full render+upload cycle on a dead end.
+  3. ai_score_campaign() — sanity-checks whether a campaign's requirements
+     look legitimate vs. low-quality/scam-like, so daily_runner.py can
+     skip bad campaigns and try another platform instead.
 
-Required environment variable: ANTHROPIC_API_KEY
+Required environment variable: GEMINI_API_KEY
+(Get one free at https://aistudio.google.com/apikey)
+
+Note: Gemini's free tier has modest rate limits (a handful of requests per
+minute, several hundred per day) — comfortably enough for this pipeline's
+once-a-day usage, but don't call these functions in a tight loop.
 """
 
 from __future__ import annotations
@@ -37,28 +34,51 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import anthropic
+import google.generativeai as genai
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 1024
+MODEL_NAME = "gemini-2.5-flash"
 
 
 class AIBrainError(Exception):
-    """Raised when a Claude call fails and there is no safe fallback."""
+    """Raised when a Gemini call fails and there is no safe fallback."""
 
 
-def _client() -> anthropic.Anthropic:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+def _model() -> "genai.GenerativeModel":
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise AIBrainError("ANTHROPIC_API_KEY environment variable is not set.")
-    return anthropic.Anthropic(api_key=api_key)
+        raise AIBrainError("GEMINI_API_KEY environment variable is not set.")
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(MODEL_NAME)
 
 
-def _extract_json(text: str) -> dict:
-    """Claude sometimes wraps JSON in ```json fences despite instructions —
-    strip those before parsing."""
+def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
+    """Sends a prompt to Gemini requesting a strict JSON response, and
+    parses it. Raises AIBrainError on any failure (network, bad JSON,
+    empty response, etc) so callers can fall back to non-AI logic."""
+    try:
+        model = _model()
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_mime_type="application/json",
+                max_output_tokens=max_output_tokens,
+                temperature=0.4,
+            ),
+        )
+        text = response.text
+    except AIBrainError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise AIBrainError(f"Gemini API call failed: {exc}") from exc
+
+    if not text:
+        raise AIBrainError("Gemini returned an empty response.")
+
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise AIBrainError(f"Could not parse Gemini's JSON response: {exc}\nRaw: {text}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -73,16 +93,17 @@ class ParsedRequirements:
     max_seconds: float = 60.0
     referral_code: Optional[str] = None
     watermark_text: Optional[str] = None
-    notes: str = ""  # anything unusual the AI flagged for a human to see
+    notes: str = ""
 
 
 _REQUIREMENTS_PROMPT = """\
 You will be given the raw requirements text for a video-clipping campaign, \
-possibly in Bengali, English, a mix, or broken grammar. Extract the actual \
-rules a video clipper must follow.
+possibly in Bengali, English, a mix, or broken grammar, and possibly noisy \
+(pulled from a full webpage, so it may include unrelated navigation text — \
+ignore that and find the actual campaign rules). Extract the actual rules \
+a video clipper must follow.
 
-Respond with ONLY a JSON object (no markdown fences, no preamble), matching \
-exactly this shape:
+Respond with ONLY a JSON object matching exactly this shape:
 {{
   "mandatory_hashtags": ["#example"],
   "required_links": ["https://..."],
@@ -107,17 +128,7 @@ def ai_parse_requirements(raw_text: str) -> ParsedRequirements:
     if not raw_text or not raw_text.strip():
         raise AIBrainError("Empty requirements text.")
 
-    client = _client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": _REQUIREMENTS_PROMPT.format(text=raw_text)}],
-    )
-    text = response.content[0].text
-    try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise AIBrainError(f"Could not parse Claude's JSON response: {exc}\nRaw: {text}") from exc
+    data = _call_json(_REQUIREMENTS_PROMPT.format(text=raw_text[:6000]))
 
     return ParsedRequirements(
         mandatory_hashtags=[h if h.startswith("#") else f"#{h}" for h in data.get("mandatory_hashtags", [])],
@@ -153,7 +164,7 @@ Mandatory hashtags (MUST all appear, do not change or drop any): {hashtags}
 Mandatory links (MUST appear in the description, verbatim): {links}
 Referral code (if any, mention it naturally): {referral_code}
 
-Respond with ONLY a JSON object (no markdown fences, no preamble):
+Respond with ONLY a JSON object:
 {{
   "title": "YouTube title, under 100 characters, MUST end with the mandatory hashtags then #shorts",
   "description": "YouTube description, 2-4 short lines, MUST include every mandatory link verbatim and the referral code if given",
@@ -170,7 +181,6 @@ def ai_generate_metadata(
     required_links: list[str],
     referral_code: Optional[str],
 ) -> AIMetadata:
-    client = _client()
     prompt = _METADATA_PROMPT.format(
         hook=hook,
         summary=summary or "(no summary provided)",
@@ -178,20 +188,8 @@ def ai_generate_metadata(
         links=", ".join(required_links) or "(none)",
         referral_code=referral_code or "(none)",
     )
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = response.content[0].text
-    try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise AIBrainError(f"Could not parse Claude's JSON response: {exc}\nRaw: {text}") from exc
+    data = _call_json(prompt)
 
-    # Safety net: verify mandatory links/hashtags actually made it in. If
-    # Claude dropped one, append it rather than silently violating the
-    # campaign's rules (which could get the submission rejected).
     description = data.get("description", "") or ""
     for link in required_links:
         if link not in description:
@@ -225,15 +223,16 @@ time to it. Flag it as LOW QUALITY if it shows signs of being a scam or \
 not worth the effort: vague or contradictory rules, asks for sensitive \
 personal/financial information beyond a normal payout method, promises \
 unrealistic payouts, has no clear content/duration rules at all, or reads \
-as spam/gibberish. Otherwise mark it GOOD — normal campaigns with clear \
-(even strict) rules are fine, being strict is not the same as being a scam.
+as spam/gibberish/mostly unrelated navigation text with no real campaign \
+content. Otherwise mark it GOOD — normal campaigns with clear (even \
+strict) rules are fine, being strict is not the same as being a scam.
 
 Campaign requirements text:
 \"\"\"
 {text}
 \"\"\"
 
-Respond with ONLY a JSON object (no markdown fences, no preamble):
+Respond with ONLY a JSON object:
 {{"is_good": true or false, "reason": "one short sentence explaining why"}}
 """
 
@@ -242,19 +241,10 @@ def ai_score_campaign(raw_text: str) -> CampaignScore:
     if not raw_text or not raw_text.strip():
         return CampaignScore(is_good=False, reason="Empty requirements text.")
 
-    client = _client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=256,
-        messages=[{"role": "user", "content": _SCORE_PROMPT.format(text=raw_text)}],
-    )
-    text = response.content[0].text
     try:
-        data = _extract_json(text)
-    except (json.JSONDecodeError, IndexError) as exc:
-        # If scoring itself fails, don't block the pipeline over it — treat
-        # as "good" and let the normal requirements parser/validator catch
-        # any real problems downstream.
+        data = _call_json(_SCORE_PROMPT.format(text=raw_text[:6000]), max_output_tokens=256)
+    except AIBrainError as exc:
+        # If scoring itself fails, don't block the pipeline over it.
         return CampaignScore(is_good=True, reason=f"Scoring unavailable ({exc}), proceeding by default.")
 
     return CampaignScore(is_good=bool(data.get("is_good", True)), reason=data.get("reason", ""))
