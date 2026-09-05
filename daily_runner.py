@@ -47,6 +47,7 @@ from vyro_client import run_check as vyro_run_check
 from vyro_client import run_submit as vyro_run_submit
 from whop_client import WhopCampaign, WhopClientError
 from whop_client import check_configured_campaigns as whop_check_configured_campaigns
+from whop_client import discover_and_join_new_campaigns as whop_discover_and_join_new_campaigns
 from whop_client import submit_video_link as whop_submit_video_link
 from youtube_uploader import UploadError, upload_video
 
@@ -157,6 +158,13 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
 
     if vyro_campaign is not None and _screen_campaign("vyro", vyro_campaign):
         return "vyro", vyro_campaign
+
+    try:
+        newly_joined = whop_discover_and_join_new_campaigns(score_fn=ai_score_campaign, max_new=2)
+        if newly_joined:
+            print(f"Auto-joined {len(newly_joined)} new Whop campaign(s): {newly_joined}")
+    except WhopClientError as exc:
+        print(f"Whop auto-discovery/join failed: {exc}", file=sys.stderr)
 
     try:
         whop_campaign = whop_check_configured_campaigns()
