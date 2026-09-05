@@ -2,8 +2,8 @@
 ai_brain.py
 
 The "AI brain" for this automation — wraps the Google Gemini API (model:
-gemini-2.5-flash, which is free-tier as of writing — light text work like
-this doesn't need a paid/Pro model) for three jobs:
+gemini-3.6-flash, which is on the free tier as of writing — light text
+work like this doesn't need a paid/Pro model) for three jobs:
 
   1. ai_parse_requirements() — reads a campaign's requirement text in ANY
      language or format and extracts structured rules: hashtags, links,
@@ -21,9 +21,15 @@ this doesn't need a paid/Pro model) for three jobs:
 Required environment variable: GEMINI_API_KEY
 (Get one free at https://aistudio.google.com/apikey)
 
-Note: Gemini's free tier has modest rate limits (a handful of requests per
-minute, several hundred per day) — comfortably enough for this pipeline's
-once-a-day usage, but don't call these functions in a tight loop.
+Note: a paid "Google AI Pro" app subscription (the consumer Gemini chat
+app) does NOT include API access or credits — the API is billed
+separately. This module intentionally sticks to a free-tier Flash model so
+no billing setup is needed at all. Free tier has modest rate limits (a
+handful of requests per minute, up to ~1000/day) — comfortably enough for
+this pipeline's once-a-day usage, but don't call these functions in a
+tight loop. If you ever do set up separate API billing and want more
+reasoning power, change MODEL_NAME below to a Pro model — no other code
+changes needed.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from typing import Optional
 
 import google.generativeai as genai
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.6-flash"
 
 
 class AIBrainError(Exception):

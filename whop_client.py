@@ -191,16 +191,48 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
             reference_card = page.get_by_text(
                 re.compile(r"edit\?usp=sharing|reference materials|dos and don", re.I)
             ).first
-            with page.context.expect_page(timeout=5000) as new_page_info:
-                reference_card.click(timeout=3000)
-            new_page = new_page_info.value
-            new_page.wait_for_load_state("domcontentloaded", timeout=8000)
-            candidate_url = new_page.url
-            if "docs.google.com" in candidate_url or "drive.google.com" in candidate_url:
-                reference_doc_url = candidate_url
-            new_page.close()
-        except Exception:  # noqa: BLE001
-            pass
+            try:
+                # Case A: click opens a new tab.
+                with page.context.expect_page(timeout=4000) as new_page_info:
+                    reference_card.click(timeout=3000)
+                new_page = new_page_info.value
+                new_page.wait_for_load_state("domcontentloaded", timeout=8000)
+                candidate_url = new_page.url
+                if "docs.google.com" in candidate_url or "drive.google.com" in candidate_url:
+                    reference_doc_url = candidate_url
+                new_page.close()
+            except PlaywrightTimeoutError:
+                # Case B: no new tab appeared — maybe it navigated the
+                # current tab instead, or opened an in-page preview whose
+                # iframe/src we can read off the DOM.
+                page.wait_for_timeout(1000)
+                if "docs.google.com" in page.url or "drive.google.com" in page.url:
+                    reference_doc_url = page.url
+                    page.go_back(timeout=5000)
+                else:
+                    # Case C: look for an iframe preview embed pointing at
+                    # a Google Doc/Drive URL, which some card-preview UIs use.
+                    try:
+                        iframe_srcs = page.eval_on_selector_all("iframe[src]", "els => els.map(e => e.src)")
+                        for src in iframe_srcs:
+                            if "docs.google.com" in src or "drive.google.com" in src:
+                                reference_doc_url = src
+                                break
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[whop_client debug] Could not resolve reference doc link: {exc}")
+
+    if not reference_doc_url:
+        # Nothing worked — print a snippet of the page around "reference"/
+        # "dos" so the next failure's logs give enough context to fix this
+        # without needing another round of screenshots.
+        lower_body = body_text.lower()
+        for marker in ("reference", "dos", "google doc"):
+            idx = lower_body.find(marker)
+            if idx != -1:
+                snippet = body_text[max(0, idx - 80):idx + 200].replace("\n", " | ")
+                print(f"[whop_client debug] Context around '{marker}': ...{snippet}...")
 
     # Which platforms this campaign accepts (icons shown near the submit
     # button / in the submit form: TikTok, YouTube, Instagram).
