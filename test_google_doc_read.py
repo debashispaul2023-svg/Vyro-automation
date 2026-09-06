@@ -1,100 +1,276 @@
 """
-test_google_doc_read.py
+google_doc_reader.py
 
-STEP 3 ISOLATED TEST — Google Doc reading + candidate source-clip URL
-extraction.
+Some Whop campaigns don't put source-footage on the campaign page —
+they link a Google Doc that contains either a direct video URL or
+(more often) a Google Drive FOLDER of footage.
 
-This does NOT download any video, render anything, or touch Whop/Vyro.
-It only:
-  1. Gets the reference Google Doc URL — either from the GOOGLE_DOC_URL
-     env var (if set), or by re-running check_configured_campaigns()
-     against the live Whop campaign (same as Part 2) and using its
-     reference_doc_url
-  2. Fetches the doc's plain text via fetch_google_doc_text()
-  3. Extracts candidate source-clip URLs via find_candidate_source_clips()
-  4. Prints everything for manual inspection
+This module:
+  1. Fetches a publicly viewable Google Doc as plain text
+     (Anyone-with-the-link — no login).
+  2. Pulls candidate footage URLs out of that text.
+  3. If a candidate is a Drive FOLDER, lists the files inside it
+     via the Drive API (GOOGLE_DRIVE_API_KEY) and returns the
+     video files as downloadable Drive file URLs.
 
-Run this as a one-off GitHub Actions step to confirm Part 3 works before
-moving on to Part 4 (video download + render).
-
-Usage:
-    python test_google_doc_read.py
-    # or, to test a specific doc without touching Whop:
-    GOOGLE_DOC_URL="https://docs.google.com/document/d/XXXX/edit" python test_google_doc_read.py
+Limitations:
+  - Docs and folders must be shared "Anyone with the link can view".
+  - A restricted / private folder needs a service account later.
+  - Nested folders are walked up to 2 levels deep.
 """
 
 from __future__ import annotations
 
 import os
-import sys
+import re
+from typing import Any
+from urllib.parse import unquote
 
-from google_doc_reader import GoogleDocReadError, fetch_google_doc_text, find_candidate_source_clips
+import requests
 
+_DOC_ID_PATTERN = re.compile(r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)")
+_FOLDER_ID_PATTERN = re.compile(
+    r"drive\.google\.com/(?:drive/)?(?:u/\d+/)?folders/([a-zA-Z0-9_-]+)"
+)
+_DRIVE_FILE_ID_PATTERN = re.compile(
+    r"drive\.google\.com/(?:file/d/|open\?id=)([a-zA-Z0-9_-]+)"
+)
+_URL_PATTERN = re.compile(r"https?://[^\s\)\]\"'<>]+")
 
-def _get_doc_url() -> str | None:
-    env_url = os.environ.get("GOOGLE_DOC_URL")
-    if env_url:
-        print(f"Using GOOGLE_DOC_URL from environment: {env_url}")
-        return env_url
-
-    print("No GOOGLE_DOC_URL set — falling back to live Whop campaign lookup (Part 2)...")
-    from whop_client import WhopClientError, check_configured_campaigns
-
-    try:
-        campaign = check_configured_campaigns()
-    except WhopClientError as exc:
-        print(f"\n❌ FAILED — Whop client raised an error:\n{exc}")
-        return None
-
-    if campaign is None:
-        print("\n⚠️  No usable Whop campaign found — can't get a reference_doc_url this way.")
-        return None
-
-    if not campaign.reference_doc_url:
-        print(f"\n⚠️  Campaign '{campaign.name}' has no reference_doc_url.")
-        return None
-
-    print(f"Got reference_doc_url from Whop campaign '{campaign.name}': {campaign.reference_doc_url}")
-    return campaign.reference_doc_url
+_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi")
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+_SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+_DRIVE_LIST_URL = "https://www.googleapis.com/drive/v3/files"
+_MAX_FOLDER_DEPTH = 2
 
 
-def main() -> int:
-    print("=" * 70)
-    print("STEP 3 TEST: Google Doc read + candidate source-clip extraction")
-    print("=" * 70)
+class GoogleDocReadError(Exception):
+    """Raised when a Google Doc or Drive folder can't be fetched or parsed."""
 
-    doc_url = _get_doc_url()
-    if not doc_url:
-        return 1
 
-    try:
-        text = fetch_google_doc_text(doc_url)
-    except GoogleDocReadError as exc:
-        print(f"\n❌ FAILED — could not fetch Google Doc:\n{exc}")
-        return 1
+def _extract_doc_id(doc_url: str) -> str:
+    match = _DOC_ID_PATTERN.search(doc_url)
+    if not match:
+        raise GoogleDocReadError(f"Not a recognizable Google Docs URL: {doc_url}")
+    return match.group(1)
 
-    print(f"\n✅ Fetched doc text: {len(text)} chars")
-    print("-" * 70)
-    print(text[:1500])
-    print("-" * 70)
 
-    candidates = find_candidate_source_clips(text)
-    print(f"\nCandidate source-clip URLs found: {len(candidates)}")
-    for i, url in enumerate(candidates, 1):
-        print(f"   {i}. {url}")
+def extract_drive_folder_id(url: str) -> str | None:
+    match = _FOLDER_ID_PATTERN.search(unquote(url))
+    return match.group(1) if match else None
 
-    if not candidates:
-        print(
-            "\n⚠️  No candidate URLs matched (drive.google.com / .mp4 / dropbox.com / "
-            "wetransfer.com / youtube.com / youtu.be). Either the doc has no direct "
-            "footage link (may need to look for a different pattern), or the doc "
-            "content itself isn't publicly reachable — check the text preview above."
+
+def is_drive_folder_url(url: str) -> bool:
+    return extract_drive_folder_id(url) is not None
+
+
+def drive_file_url(file_id: str) -> str:
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
+
+def fetch_google_doc_text(doc_url: str) -> str:
+    """Fetches the plain-text content of a publicly viewable Google Doc."""
+    doc_id = _extract_doc_id(doc_url)
+    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+
+    resp = requests.get(export_url, timeout=30)
+    if resp.status_code != 200:
+        raise GoogleDocReadError(
+            f"Could not fetch Google Doc (status {resp.status_code}). "
+            "It may not be shared as 'Anyone with the link can view'."
         )
-        return 1
+    return resp.text
 
-    print("\n✅ Part 3 looks good. Ready to move on to Part 4 (video download + render).")
-    return 0
+
+def extract_urls(text: str) -> list[str]:
+    """Pulls out every URL mentioned in a block of text, in order."""
+    return _URL_PATTERN.findall(text)
+
+
+def find_candidate_source_clips(doc_text: str) -> list[str]:
+    """Raw URL candidates from doc text (may still include Drive folders)."""
+    urls = extract_urls(doc_text)
+    candidates = []
+    seen: set[str] = set()
+    for url in urls:
+        cleaned = url.rstrip(".,;:)")
+        lower = cleaned.lower()
+        if any(
+            marker in lower
+            for marker in (
+                "drive.google.com",
+                ".mp4",
+                "dropbox.com",
+                "wetransfer.com",
+                "we.tl/",
+                "youtube.com",
+                "youtu.be",
+                "vimeo.com",
+            )
+        ):
+            if cleaned not in seen:
+                seen.add(cleaned)
+                candidates.append(cleaned)
+    return candidates
+
+
+def _looks_like_video(name: str, mime_type: str) -> bool:
+    mime = (mime_type or "").lower()
+    if mime.startswith("video/"):
+        return True
+    lower_name = (name or "").lower()
+    return any(lower_name.endswith(ext) for ext in _VIDEO_EXTENSIONS)
+
+
+def _drive_api_key() -> str:
+    key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip()
+    if not key:
+        raise GoogleDocReadError(
+            "GOOGLE_DRIVE_API_KEY is missing. Add it as a GitHub secret "
+            "and pass it into the workflow env."
+        )
+    return key
+
+
+def list_drive_folder_files(folder_id: str, api_key: str) -> list[dict[str, Any]]:
+    """Lists non-trashed children of a publicly shared Drive folder."""
+    files: list[dict[str, Any]] = []
+    page_token: str | None = None
+
+    while True:
+        params: dict[str, Any] = {
+            "q": f"'{folder_id}' in parents and trashed = false",
+            "fields": (
+                "nextPageToken,"
+                "files(id,name,mimeType,size,shortcutDetails)"
+            ),
+            "pageSize": 100,
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+            "key": api_key,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
+        resp = requests.get(_DRIVE_LIST_URL, params=params, timeout=30)
+        if resp.status_code != 200:
+            body = resp.text[:400]
+            raise GoogleDocReadError(
+                f"Drive API could not list folder {folder_id} "
+                f"(status {resp.status_code}). {body} "
+                "Usual causes: folder is not 'Anyone with the link', "
+                "Drive API is not enabled on the key's Cloud project, "
+                "or the API key is restricted to HTTP referrers "
+                "(must be unrestricted / IP-none for GitHub Actions)."
+            )
+
+        payload = resp.json()
+        files.extend(payload.get("files") or [])
+        page_token = payload.get("nextPageToken")
+        if not page_token:
+            break
+
+    return files
+
+
+def find_videos_in_drive_folder(
+    folder_url_or_id: str,
+    *,
+    api_key: str | None = None,
+    depth: int = 0,
+) -> list[str]:
+    """Returns Drive file view-URLs for videos inside a folder."""
+    folder_id = extract_drive_folder_id(folder_url_or_id) or folder_url_or_id
+    if not folder_id or "/" in folder_id:
+        raise GoogleDocReadError(f"Not a recognizable Drive folder: {folder_url_or_id}")
+
+    key = api_key or _drive_api_key()
+    entries = list_drive_folder_files(folder_id, key)
+    print(f"[drive] folder {folder_id}: {len(entries)} item(s) at depth {depth}")
+
+    videos: list[str] = []
+    other_files: list[str] = []
+
+    for item in entries:
+        mime = item.get("mimeType") or ""
+        name = item.get("name") or ""
+        item_id = item.get("id") or ""
+        if not item_id:
+            continue
+
+        if mime == _SHORTCUT_MIME:
+            details = item.get("shortcutDetails") or {}
+            target_id = details.get("targetId")
+            target_mime = details.get("targetMimeType") or ""
+            if target_id and _looks_like_video(name, target_mime):
+                videos.append(drive_file_url(target_id))
+            elif target_id and target_mime == _FOLDER_MIME and depth < _MAX_FOLDER_DEPTH:
+                videos.extend(
+                    find_videos_in_drive_folder(target_id, api_key=key, depth=depth + 1)
+                )
+            continue
+
+        if mime == _FOLDER_MIME:
+            if depth < _MAX_FOLDER_DEPTH:
+                videos.extend(
+                    find_videos_in_drive_folder(item_id, api_key=key, depth=depth + 1)
+                )
+            continue
+
+        url = drive_file_url(item_id)
+        size = item.get("size") or "?"
+        print(f"[drive]   - {name} ({mime or 'unknown'}, size={size})")
+        if _looks_like_video(name, mime):
+            videos.append(url)
+        else:
+            other_files.append(url)
+
+    if videos:
+        return list(dict.fromkeys(videos))
+
+    if len(other_files) == 1:
+        print("[drive] no video mime/extension match; using the only file in the folder")
+        return other_files
+
+    return []
+
+
+def resolve_candidate_source_clips(
+    doc_text: str,
+    *,
+    api_key: str | None = None,
+) -> list[str]:
+    """Doc text → footage URLs, expanding any Drive folders along the way."""
+    raw = find_candidate_source_clips(doc_text)
+    resolved: list[str] = []
+    seen: set[str] = set()
+
+    for url in raw:
+        if is_drive_folder_url(url):
+            print(f"[drive] expanding folder: {url}")
+            expanded = find_videos_in_drive_folder(url, api_key=api_key)
+            for item in expanded:
+                if item not in seen:
+                    seen.add(item)
+                    resolved.append(item)
+            continue
+        if url not in seen:
+            seen.add(url)
+            resolved.append(url)
+
+    return resolved
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python google_doc_reader.py <google_doc_url>")
+        sys.exit(1)
+
+    text = fetch_google_doc_text(sys.argv[1])
+    print("--- Doc text ---")
+    print(text[:2000])
+    print("--- Resolved source clips ---")
+    for url in resolve_candidate_source_clips(text):
+        print(url)
