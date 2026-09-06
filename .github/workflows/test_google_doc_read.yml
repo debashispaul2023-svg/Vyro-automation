@@ -26,8 +26,9 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Run isolated Google Doc read test
+      - name: Run isolated Google Doc + Drive folder test
         env:
           WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
           GOOGLE_DOC_URL: ${{ github.event.inputs.doc_url }}
         run: python test_google_doc_read.py
