@@ -225,6 +225,35 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
     body_text = frame.inner_text("body")
     print(f"[whop_client debug] Captured {len(body_text)} chars. First 300: {body_text[:300]!r}")
 
+    # The app iframe has its own internal nav (Home/Campaigns/Discover/...)
+    # and can land on "Discover" (browsable campaigns from this creator)
+    # instead of "Campaigns" (the ones you've actually joined) even when we
+    # navigated to a specific campaign's URL. If we don't see "Submit clip"
+    # yet, try clicking the "Campaigns" nav item and re-reading.
+    if "submit clip" not in body_text.lower():
+        try:
+            print("[whop_client debug] 'Submit clip' not found yet — trying the app's 'Campaigns' nav tab.")
+            frame.get_by_text(re.compile(r"^Campaigns$", re.I)).first.click(timeout=5000)
+            page.wait_for_timeout(2000)
+            body_text = frame.inner_text("body")
+            print(f"[whop_client debug] After clicking 'Campaigns': {len(body_text)} chars. First 300: {body_text[:300]!r}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[whop_client debug] Could not click 'Campaigns' nav tab: {exc}")
+
+    # Still no submit button? There may be a list of joined campaigns here
+    # (if you've joined more than one from this creator) — click the first
+    # campaign-looking card/link that isn't the nav item itself.
+    if "submit clip" not in body_text.lower():
+        try:
+            print("[whop_client debug] Still no 'Submit clip' — trying to click the first campaign card in the list.")
+            candidate = frame.get_by_role("link").filter(has_text=re.compile(r".{5,}")).first
+            candidate.click(timeout=5000)
+            page.wait_for_timeout(2000)
+            body_text = frame.inner_text("body")
+            print(f"[whop_client debug] After clicking first campaign card: {len(body_text)} chars. First 300: {body_text[:300]!r}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[whop_client debug] Could not click into a campaign card: {exc}")
+
     if "not available in your region" in body_text.lower():
         return None
 
