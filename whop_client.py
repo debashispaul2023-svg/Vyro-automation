@@ -254,15 +254,21 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         except Exception as exc:  # noqa: BLE001
             print(f"[whop_client debug] Could not click 'Campaigns' nav tab: {exc}")
 
-    # "Your Campaigns" can be a scrollable list with more than one joined
-    # campaign, possibly lazy-loaded. If we have a name_hint, scroll down
-    # repeatedly looking for a card that mentions it, then click that
-    # specific card's title/preview (not its "Submit clip" button — we
-    # want the full detail view with Dos/Reference materials first).
-    if "submit clip" in body_text.lower() and name_hint and name_hint.lower() not in body_text.lower():
-        print(f"[whop_client debug] On a campaigns list, but '{name_hint}' not visible yet — scrolling to find it.")
-        found_hint = False
+    # IMPORTANT: "Submit clip" appears as an inline button on EVERY card in
+    # a list view too, not just on a single campaign's detail page — so
+    # its mere presence doesn't mean we're on the right page yet. Count
+    # occurrences: more than one means we're still looking at a LIST of
+    # campaigns and need to drill into the specific one via name_hint.
+    submit_clip_count = len(re.findall(r"submit clip", body_text, re.I))
+    looks_like_list = submit_clip_count > 1
+    print(f"[whop_client debug] 'Submit clip' appears {submit_clip_count} time(s) — {'looks like a LIST view' if looks_like_list else 'looks like a single detail page'}.")
+
+    if looks_like_list and name_hint:
+        print(f"[whop_client debug] On a campaigns list — looking for '{name_hint}' to click into.")
+        found_hint = name_hint.lower() in body_text.lower()
         for scroll_attempt in range(8):
+            if found_hint:
+                break
             try:
                 frame.locator("body").evaluate("el => el.scrollBy(0, 600)")
             except Exception:  # noqa: BLE001
@@ -272,26 +278,30 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
             if name_hint.lower() in body_text.lower():
                 found_hint = True
                 print(f"[whop_client debug] Found '{name_hint}' after {scroll_attempt + 1} scroll(s).")
-                break
+
         if not found_hint:
             print(
                 f"[whop_client debug] Scrolled 8 times but never found '{name_hint}' in the "
                 "campaigns list. It may not be joined under this app, or the name_hint is wrong."
             )
-
-        if found_hint:
+        else:
             try:
                 card_title = frame.get_by_text(re.compile(re.escape(name_hint), re.I)).first
                 card_title.click(timeout=5000)
                 page.wait_for_timeout(2000)
                 body_text = frame.inner_text("body")
-                print(f"[whop_client debug] After clicking '{name_hint}' card: {len(body_text)} chars. First 300: {body_text[:300]!r}")
+                submit_clip_count = len(re.findall(r"submit clip", body_text, re.I))
+                looks_like_list = submit_clip_count > 1
+                print(
+                    f"[whop_client debug] After clicking '{name_hint}' card: {len(body_text)} chars, "
+                    f"'submit clip' x{submit_clip_count}. First 300: {body_text[:300]!r}"
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[whop_client debug] Could not click the '{name_hint}' card: {exc}")
 
-    # Still no submit button at all? There may be exactly one joined
-    # campaign — click the first campaign-looking card/link as a last resort.
-    if "submit clip" not in body_text.lower():
+    # Still on a list (no name_hint given, or it didn't work)? Fall back to
+    # clicking the first campaign-looking card/link as a last resort.
+    if looks_like_list or "submit clip" not in body_text.lower():
         try:
             print("[whop_client debug] Still no 'Submit clip' — trying to click the first campaign card in the list.")
             candidate = frame.get_by_role("link").filter(has_text=re.compile(r".{5,}")).first
