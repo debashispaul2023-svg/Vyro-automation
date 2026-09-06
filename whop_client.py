@@ -154,14 +154,22 @@ def _get_content_frame(page: Page):
     <iframe>. page.inner_text("body") on the main page only sees Whop's
     OWN outer shell (search bar, balance, notification counts) — not the
     actual campaign content, which lives inside that iframe's separate
-    document. This finds the iframe that actually contains the campaign
-    app and returns it (as a Playwright Frame, which supports the same
-    get_by_text/get_by_role/inner_text methods as Page) — or falls back to
-    the main page if no such iframe is found (e.g. a campaign that isn't
-    iframe-embedded).
+    document.
+
+    There can be MULTIPLE iframes though — e.g. hidden tracking/pixel
+    script iframes (TikTok/Meta conversion tracking) that also happen to
+    have a lot of "text" (their raw JS source). So it's not enough to pick
+    the iframe with the most text — we specifically look for one whose
+    text contains real campaign UI words ("submit clip", "budget",
+    "requirement", etc), and skip anything that looks like injected script
+    source (starts with "(function", "!function", etc).
     """
+    CONTENT_MARKERS = ("submit clip", "budget", "requirement", "campaign", "views", "dos")
+    SCRIPT_LOOKING_PREFIXES = ("(function", "!function", "window.", "var ", "const ", "let ")
+
     try:
         page.wait_for_timeout(1500)  # give iframes a moment to attach
+        best_candidate = None
         for frame in page.frames:
             if frame == page.main_frame:
                 continue
@@ -169,9 +177,29 @@ def _get_content_frame(page: Page):
                 text = frame.inner_text("body", timeout=3000)
             except Exception:  # noqa: BLE001
                 continue
-            if text and len(text.strip()) > 100:
-                print(f"[whop_client debug] Using iframe content frame (url={frame.url}), {len(text)} chars.")
+
+            stripped = text.strip()
+            if not stripped or stripped.startswith(SCRIPT_LOOKING_PREFIXES):
+                continue  # looks like a script-injection artifact, not real UI
+
+            lower = stripped.lower()
+            marker_hits = sum(1 for marker in CONTENT_MARKERS if marker in lower)
+            if marker_hits > 0:
+                print(
+                    f"[whop_client debug] Frame {frame.url} matched {marker_hits} content "
+                    f"markers, {len(text)} chars — using this one."
+                )
                 return frame
+
+            if best_candidate is None and len(stripped) > 100:
+                best_candidate = frame  # keep as a weak fallback only
+
+        if best_candidate is not None:
+            print(
+                f"[whop_client debug] No frame matched content markers; falling back to "
+                f"largest non-script frame: {best_candidate.url}"
+            )
+            return best_candidate
     except Exception as exc:  # noqa: BLE001
         print(f"[whop_client debug] Iframe detection failed: {exc}")
 
