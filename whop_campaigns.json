@@ -1,5 +1,8 @@
 {
-  "joined_campaign_urls": [
-    "https://whop.com/clippingculture/exp_zeADOv9rOOKk2x/app/campaigns/24ad920b-d24f-479e-9cef-f22182e4a0c0/"
+  "joined_campaigns": [
+    {
+      "url": "https://whop.com/clippingculture/exp_zeADOv9rOOKk2x/app/campaigns/24ad920b-d24f-479e-9cef-f22182e4a0c0/",
+      "name_hint": "RICOCHET"
+    }
   ]
 }

@@ -82,12 +82,21 @@ class WhopCampaign:
     platforms: list[str] = field(default_factory=list)  # e.g. ["tiktok", "youtube", "instagram"]
 
 
-def _load_campaign_urls() -> list[str]:
+def _load_configured_campaigns() -> list[dict]:
+    """Loads whop_campaigns.json. Supports both the current format
+    ({"joined_campaigns": [{"url": ..., "name_hint": ...}]}) and the older
+    format ({"joined_campaign_urls": [...]}) for backwards compatibility —
+    entries from the old format get an empty name_hint."""
     if not os.path.isfile(CAMPAIGNS_CONFIG_PATH):
         return []
     with open(CAMPAIGNS_CONFIG_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return list(data.get("joined_campaign_urls", []))
+
+    if "joined_campaigns" in data:
+        return list(data["joined_campaigns"])
+
+    # Legacy format fallback.
+    return [{"url": u, "name_hint": ""} for u in data.get("joined_campaign_urls", [])]
 
 
 def _parse_cookie_header(raw: str) -> list[dict]:
@@ -207,9 +216,14 @@ def _get_content_frame(page: Page):
     return page
 
 
-def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCampaign]:
+def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = "") -> Optional[WhopCampaign]:
     """Reads a single joined-campaign page. Returns None if the campaign
-    looks unavailable (region-locked, budget fully used, etc)."""
+    looks unavailable (region-locked, budget fully used, etc).
+
+    name_hint (e.g. "RICOCHET") is an optional keyword from the campaign's
+    name, stored in whop_campaigns.json, used to find the right card when
+    the app lands on a scrollable "Your Campaigns" list instead of the
+    specific campaign directly."""
     # Whop's campaign page is a heavy single-page app — the real content
     # (budget, description, submit button) loads via background API calls
     # AFTER the initial HTML, and often lives inside an embedded app
@@ -240,9 +254,43 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
         except Exception as exc:  # noqa: BLE001
             print(f"[whop_client debug] Could not click 'Campaigns' nav tab: {exc}")
 
-    # Still no submit button? There may be a list of joined campaigns here
-    # (if you've joined more than one from this creator) — click the first
-    # campaign-looking card/link that isn't the nav item itself.
+    # "Your Campaigns" can be a scrollable list with more than one joined
+    # campaign, possibly lazy-loaded. If we have a name_hint, scroll down
+    # repeatedly looking for a card that mentions it, then click that
+    # specific card's title/preview (not its "Submit clip" button — we
+    # want the full detail view with Dos/Reference materials first).
+    if "submit clip" in body_text.lower() and name_hint and name_hint.lower() not in body_text.lower():
+        print(f"[whop_client debug] On a campaigns list, but '{name_hint}' not visible yet — scrolling to find it.")
+        found_hint = False
+        for scroll_attempt in range(8):
+            try:
+                frame.locator("body").evaluate("el => el.scrollBy(0, 600)")
+            except Exception:  # noqa: BLE001
+                break
+            page.wait_for_timeout(600)
+            body_text = frame.inner_text("body")
+            if name_hint.lower() in body_text.lower():
+                found_hint = True
+                print(f"[whop_client debug] Found '{name_hint}' after {scroll_attempt + 1} scroll(s).")
+                break
+        if not found_hint:
+            print(
+                f"[whop_client debug] Scrolled 8 times but never found '{name_hint}' in the "
+                "campaigns list. It may not be joined under this app, or the name_hint is wrong."
+            )
+
+        if found_hint:
+            try:
+                card_title = frame.get_by_text(re.compile(re.escape(name_hint), re.I)).first
+                card_title.click(timeout=5000)
+                page.wait_for_timeout(2000)
+                body_text = frame.inner_text("body")
+                print(f"[whop_client debug] After clicking '{name_hint}' card: {len(body_text)} chars. First 300: {body_text[:300]!r}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[whop_client debug] Could not click the '{name_hint}' card: {exc}")
+
+    # Still no submit button at all? There may be exactly one joined
+    # campaign — click the first campaign-looking card/link as a last resort.
     if "submit clip" not in body_text.lower():
         try:
             print("[whop_client debug] Still no 'Submit clip' — trying to click the first campaign card in the list.")
@@ -359,9 +407,17 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
     )
 
 
-def _save_campaign_urls(urls: list[str]) -> None:
+def _save_new_campaign_urls(new_urls: list[str]) -> None:
+    """Appends newly auto-joined campaign URLs into whop_campaigns.json
+    (empty name_hint — auto-joined campaigns don't have one yet; add one
+    manually later if a specific campaign needs scroll-to-find help)."""
+    configured = _load_configured_campaigns()
+    existing_urls = {entry["url"] for entry in configured}
+    for url in new_urls:
+        if url not in existing_urls:
+            configured.append({"url": url, "name_hint": ""})
     with open(CAMPAIGNS_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"joined_campaign_urls": urls}, f, indent=2)
+        json.dump({"joined_campaigns": configured}, f, indent=2)
 
 
 def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
@@ -385,7 +441,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
     fixed from logs alone, the same way the rest of whop_client.py's
     selectors were iteratively fixed.
     """
-    known_urls = set(_load_campaign_urls())
+    known_urls = {entry["url"] for entry in _load_configured_campaigns()}
     newly_joined: list[str] = []
 
     with sync_playwright() as p:
@@ -480,7 +536,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
             browser.close()
 
     if newly_joined:
-        _save_campaign_urls(sorted(known_urls))
+        _save_new_campaign_urls(sorted(known_urls))
 
     return newly_joined
 
@@ -496,11 +552,11 @@ def _close_any_modal(page: Page) -> None:
 
 
 def check_configured_campaigns() -> Optional[WhopCampaign]:
-    """Checks every campaign URL listed in whop_campaigns.json and returns
-    the first usable one found (not region-locked, not budget-exhausted).
+    """Checks every campaign listed in whop_campaigns.json and returns the
+    first usable one found (not region-locked, not budget-exhausted).
     Returns None if none are usable right now."""
-    urls = _load_campaign_urls()
-    if not urls:
+    configured = _load_configured_campaigns()
+    if not configured:
         return None
 
     with sync_playwright() as p:
@@ -508,9 +564,11 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
-            for url in urls:
+            for entry in configured:
+                url = entry["url"]
+                name_hint = entry.get("name_hint", "")
                 _ensure_logged_in(page, url)
-                campaign = _extract_campaign_details(page, url)
+                campaign = _extract_campaign_details(page, url, name_hint=name_hint)
                 if campaign is not None:
                     return campaign
             return None
