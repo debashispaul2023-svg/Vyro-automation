@@ -287,7 +287,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         else:
             try:
                 card_title = frame.get_by_text(re.compile(re.escape(name_hint), re.I)).first
-                card_title.click(timeout=5000)
+                card_title.click(timeout=5000, force=True)
                 page.wait_for_timeout(2000)
                 body_text = frame.inner_text("body")
                 submit_clip_count = len(re.findall(r"submit clip", body_text, re.I))
@@ -300,12 +300,18 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
                 print(f"[whop_client debug] Could not click the '{name_hint}' card: {exc}")
 
     # Still on a list (no name_hint given, or it didn't work)? Fall back to
-    # clicking the first campaign-looking card/link as a last resort.
+    # clicking the first campaign-looking card/link as a last resort —
+    # excluding accessibility helper links like "Skip to content" which
+    # would otherwise match too (they're links with visible-ish text too).
     if looks_like_list or "submit clip" not in body_text.lower():
         try:
             print("[whop_client debug] Still no 'Submit clip' — trying to click the first campaign card in the list.")
-            candidate = frame.get_by_role("link").filter(has_text=re.compile(r".{5,}")).first
-            candidate.click(timeout=5000)
+            candidate = frame.get_by_role("link").filter(
+                has_text=re.compile(r".{5,}")
+            ).filter(
+                has_not_text=re.compile(r"skip to content|help & support", re.I)
+            ).first
+            candidate.click(timeout=5000, force=True)
             page.wait_for_timeout(2000)
             body_text = frame.inner_text("body")
             print(f"[whop_client debug] After clicking first campaign card: {len(body_text)} chars. First 300: {body_text[:300]!r}")
