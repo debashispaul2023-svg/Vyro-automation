@@ -147,22 +147,54 @@ def _ensure_logged_in(page: Page, target_url: str) -> None:
         )
 
 
+def _get_content_frame(page: Page):
+    """
+    Whop hosts third-party campaign apps (like this one — the URL contains
+    'exp_...', Whop's marker for an embedded app extension) inside an
+    <iframe>. page.inner_text("body") on the main page only sees Whop's
+    OWN outer shell (search bar, balance, notification counts) — not the
+    actual campaign content, which lives inside that iframe's separate
+    document. This finds the iframe that actually contains the campaign
+    app and returns it (as a Playwright Frame, which supports the same
+    get_by_text/get_by_role/inner_text methods as Page) — or falls back to
+    the main page if no such iframe is found (e.g. a campaign that isn't
+    iframe-embedded).
+    """
+    try:
+        page.wait_for_timeout(1500)  # give iframes a moment to attach
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            try:
+                text = frame.inner_text("body", timeout=3000)
+            except Exception:  # noqa: BLE001
+                continue
+            if text and len(text.strip()) > 100:
+                print(f"[whop_client debug] Using iframe content frame (url={frame.url}), {len(text)} chars.")
+                return frame
+    except Exception as exc:  # noqa: BLE001
+        print(f"[whop_client debug] Iframe detection failed: {exc}")
+
+    print("[whop_client debug] No substantial iframe found; using main page directly.")
+    return page
+
+
 def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCampaign]:
     """Reads a single joined-campaign page. Returns None if the campaign
     looks unavailable (region-locked, budget fully used, etc)."""
     # Whop's campaign page is a heavy single-page app — the real content
     # (budget, description, submit button) loads via background API calls
-    # AFTER the initial HTML. Wait explicitly for something campaign-
-    # specific to appear before reading the page text, otherwise we just
-    # capture the app's nav shell (which is what was happening before).
+    # AFTER the initial HTML, and often lives inside an embedded app
+    # iframe rather than the main page body (see _get_content_frame).
     try:
         page.get_by_text(re.compile(r"submit clip|budget|views", re.I)).first.wait_for(
             state="visible", timeout=12000
         )
     except PlaywrightTimeoutError:
-        print(f"[whop_client debug] Campaign content never appeared to load for {campaign_url}.")
+        print(f"[whop_client debug] Campaign content never appeared on the main page for {campaign_url} (checking iframes next).")
 
-    body_text = page.inner_text("body")
+    frame = _get_content_frame(page)
+    body_text = frame.inner_text("body")
     print(f"[whop_client debug] Captured {len(body_text)} chars. First 300: {body_text[:300]!r}")
 
     if "not available in your region" in body_text.lower():
@@ -181,7 +213,7 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
     # resilient fallback is just the page title.
     name = (page.title() or "").split("|")[0].strip() or "Whop campaign"
     try:
-        heading = page.get_by_role("heading").first.inner_text(timeout=2000)
+        heading = frame.get_by_role("heading").first.inner_text(timeout=2000)
         if heading and len(heading.strip()) > 3:
             name = heading.strip()
     except Exception:  # noqa: BLE001
@@ -194,7 +226,7 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
     # and capture whichever URL the resulting new tab lands on.
     reference_doc_url = None
     try:
-        all_links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        all_links = frame.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         for href in all_links:
             if "docs.google.com" in href or "drive.google.com" in href:
                 reference_doc_url = href
@@ -204,7 +236,7 @@ def _extract_campaign_details(page: Page, campaign_url: str) -> Optional[WhopCam
 
     if not reference_doc_url:
         try:
-            reference_card = page.get_by_text(
+            reference_card = frame.get_by_text(
                 re.compile(r"edit\?usp=sharing|reference materials|resources|dos and don", re.I)
             ).first
             try:
@@ -429,9 +461,10 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
             browser.close()
 
 
-def _select_platform_icon(page: Page, video_url: str) -> None:
+def _select_platform_icon(frame, video_url: str) -> None:
     """The submit form has TikTok/YouTube/Instagram icon buttons near the
-    top — click whichever matches the video URL's domain."""
+    top — click whichever matches the video URL's domain. `frame` can be a
+    Page or a Frame (both support the same locator API)."""
     lower = video_url.lower()
     if "tiktok.com" in lower:
         platform_name = "tiktok"
@@ -443,7 +476,7 @@ def _select_platform_icon(page: Page, video_url: str) -> None:
         return  # unknown platform, let Whop auto-detect if it can
 
     try:
-        page.get_by_role("button", name=re.compile(platform_name, re.I)).click(timeout=3000)
+        frame.get_by_role("button", name=re.compile(platform_name, re.I)).click(timeout=3000)
     except Exception:  # noqa: BLE001
         pass  # not critical — Whop may auto-detect the platform from the URL
 
@@ -457,26 +490,27 @@ def submit_video_link(campaign: WhopCampaign, video_url: str) -> None:
         page = context.new_page()
         try:
             _ensure_logged_in(page, campaign.submit_page_url)
+            frame = _get_content_frame(page)  # the campaign app likely lives in an iframe (see comment on _get_content_frame)
 
             # Open the "Submit clip" modal.
-            page.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
+            frame.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
             page.wait_for_timeout(1000)  # let the modal animate in
 
-            _select_platform_icon(page, video_url)
+            _select_platform_icon(frame, video_url)
 
             # The URL input field (placeholder mentions tiktok.com/youtube/instagram).
-            url_input = page.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
+            url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
             url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
 
             # Required "I've read the requirements..." checkbox.
             try:
-                page.get_by_role("checkbox").first.check(timeout=3000)
+                frame.get_by_role("checkbox").first.check(timeout=3000)
             except Exception:  # noqa: BLE001
                 # fall back to clicking the text label if the checkbox role isn't picked up
-                page.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+                frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
 
             # Final submit button inside the modal (same label, second instance).
-            page.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
+            frame.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
             _settle(page)
         except PlaywrightTimeoutError as exc:
             raise WhopClientError(f"Submission failed — a step timed out. Details: {exc}") from exc
