@@ -55,6 +55,9 @@ def _load_client_config() -> dict:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         print(f"CLIENT_SECRETS_JSON is not valid JSON: {exc}", file=sys.stderr)
+        print(f"Length: {len(raw)} chars.", file=sys.stderr)
+        print(f"First 150 chars: {raw[:150]!r}", file=sys.stderr)
+        print(f"Chars 0-30 as codepoints: {[hex(ord(c)) for c in raw[:30]]}", file=sys.stderr)
         sys.exit(1)
 
     # Google's client_secrets.json wraps everything under "installed" or "web".
