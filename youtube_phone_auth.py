@@ -19,7 +19,7 @@ import urllib.request
 
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPE = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl"
+SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
 
 class AuthError(Exception):
