@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
 
@@ -66,6 +67,56 @@ def is_drive_folder_url(url: str) -> bool:
 
 def drive_file_url(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
+
+
+@dataclass
+class DriveClip:
+    """One video file found inside a Drive folder (or a direct Drive file)."""
+
+    file_id: str
+    name: str
+    mime_type: str
+    size_bytes: int
+    url: str
+    width: int = 0
+    height: int = 0
+    duration_ms: int = 0
+
+
+def extract_drive_file_id(url: str) -> str | None:
+    match = _DRIVE_FILE_ID_PATTERN.search(unquote(url))
+    return match.group(1) if match else None
+
+
+def _clip_from_drive_item(item: dict[str, Any], *, file_id: str | None = None) -> DriveClip:
+    fid = file_id or item.get("id") or ""
+    meta = item.get("videoMediaMetadata") or {}
+    try:
+        size_bytes = int(item.get("size") or 0)
+    except (TypeError, ValueError):
+        size_bytes = 0
+    try:
+        width = int(meta.get("width") or 0)
+    except (TypeError, ValueError):
+        width = 0
+    try:
+        height = int(meta.get("height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    try:
+        duration_ms = int(meta.get("durationMillis") or 0)
+    except (TypeError, ValueError):
+        duration_ms = 0
+    return DriveClip(
+        file_id=fid,
+        name=item.get("name") or fid,
+        mime_type=item.get("mimeType") or "",
+        size_bytes=size_bytes,
+        url=drive_file_url(fid),
+        width=width,
+        height=height,
+        duration_ms=duration_ms,
+    )
 
 
 def fetch_google_doc_text(doc_url: str) -> str:
@@ -142,7 +193,7 @@ def list_drive_folder_files(folder_id: str, api_key: str) -> list[dict[str, Any]
             "q": f"'{folder_id}' in parents and trashed = false",
             "fields": (
                 "nextPageToken,"
-                "files(id,name,mimeType,size,shortcutDetails)"
+                "files(id,name,mimeType,size,videoMediaMetadata,shortcutDetails)"
             ),
             "pageSize": 100,
             "supportsAllDrives": "true",
@@ -173,13 +224,13 @@ def list_drive_folder_files(folder_id: str, api_key: str) -> list[dict[str, Any]
     return files
 
 
-def find_videos_in_drive_folder(
+def collect_video_clips_in_drive_folder(
     folder_url_or_id: str,
     *,
     api_key: str | None = None,
     depth: int = 0,
-) -> list[str]:
-    """Returns Drive file view-URLs for videos inside a folder."""
+) -> list[DriveClip]:
+    """Walk a Drive folder (2 levels) and return video files with metadata."""
     folder_id = extract_drive_folder_id(folder_url_or_id) or folder_url_or_id
     if not folder_id or "/" in folder_id:
         raise GoogleDocReadError(f"Not a recognizable Drive folder: {folder_url_or_id}")
@@ -188,8 +239,8 @@ def find_videos_in_drive_folder(
     entries = list_drive_folder_files(folder_id, key)
     print(f"[drive] folder {folder_id}: {len(entries)} item(s) at depth {depth}")
 
-    videos: list[str] = []
-    other_files: list[str] = []
+    clips: list[DriveClip] = []
+    other_files: list[DriveClip] = []
 
     for item in entries:
         mime = item.get("mimeType") or ""
@@ -203,36 +254,61 @@ def find_videos_in_drive_folder(
             target_id = details.get("targetId")
             target_mime = details.get("targetMimeType") or ""
             if target_id and _looks_like_video(name, target_mime):
-                videos.append(drive_file_url(target_id))
+                clips.append(_clip_from_drive_item(item, file_id=target_id))
             elif target_id and target_mime == _FOLDER_MIME and depth < _MAX_FOLDER_DEPTH:
-                videos.extend(
-                    find_videos_in_drive_folder(target_id, api_key=key, depth=depth + 1)
+                clips.extend(
+                    collect_video_clips_in_drive_folder(target_id, api_key=key, depth=depth + 1)
                 )
             continue
 
         if mime == _FOLDER_MIME:
             if depth < _MAX_FOLDER_DEPTH:
-                videos.extend(
-                    find_videos_in_drive_folder(item_id, api_key=key, depth=depth + 1)
+                clips.extend(
+                    collect_video_clips_in_drive_folder(item_id, api_key=key, depth=depth + 1)
                 )
             continue
 
-        url = drive_file_url(item_id)
-        size = item.get("size") or "?"
-        print(f"[drive]   - {name} ({mime or 'unknown'}, size={size})")
+        clip = _clip_from_drive_item(item)
+        size = clip.size_bytes or "?"
+        print(
+            f"[drive]   - {name} ({mime or 'unknown'}, size={size}, "
+            f"{clip.width}x{clip.height}, {clip.duration_ms}ms)"
+        )
         if _looks_like_video(name, mime):
-            videos.append(url)
+            clips.append(clip)
         else:
-            other_files.append(url)
+            other_files.append(clip)
 
-    if videos:
-        return list(dict.fromkeys(videos))
+    if clips:
+        seen: set[str] = set()
+        unique: list[DriveClip] = []
+        for clip in clips:
+            if clip.file_id in seen:
+                continue
+            seen.add(clip.file_id)
+            unique.append(clip)
+        return unique
 
     if len(other_files) == 1:
         print("[drive] no video mime/extension match; using the only file in the folder")
         return other_files
 
     return []
+
+
+def find_videos_in_drive_folder(
+    folder_url_or_id: str,
+    *,
+    api_key: str | None = None,
+    depth: int = 0,
+) -> list[str]:
+    """Returns Drive file view-URLs for videos inside a folder."""
+    return [
+        clip.url
+        for clip in collect_video_clips_in_drive_folder(
+            folder_url_or_id, api_key=api_key, depth=depth
+        )
+    ]
 
 
 def resolve_candidate_source_clips(
