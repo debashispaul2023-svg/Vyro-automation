@@ -1,0 +1,62 @@
+name: TEST - Metadata + YouTube (Part 5)
+
+on:
+  workflow_dispatch:
+    inputs:
+      doc_url:
+        description: "Optional Google Doc URL (blank = known U2 doc)"
+        required: false
+        default: ""
+      clip_file_id:
+        description: "Optional Drive file id (blank = Part 4 winner Comp 1_43)"
+        required: false
+        default: ""
+
+jobs:
+  test-youtube-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg + imagemagick
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
+
+      - name: Fix ImageMagick security policy for text rendering
+        run: sudo sed -i '/pattern="@\*"/d' /etc/ImageMagick-6/policy.xml || true
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore YouTube OAuth token
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          if [ -z "$YOUTUBE_TOKEN_JSON" ]; then
+            echo "YOUTUBE_TOKEN_JSON secret is empty"
+            exit 1
+          fi
+          printf '%s' "$YOUTUBE_TOKEN_JSON" > token.json
+          echo "Wrote token.json ($(wc -c < token.json) bytes)"
+
+      - name: Run isolated metadata + YouTube upload test
+        env:
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_DOC_URL: ${{ github.event.inputs.doc_url }}
+          PART5_CLIP_FILE_ID: ${{ github.event.inputs.clip_file_id }}
+        run: python test_youtube_upload.py
+
+      - name: Upload rendered short as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: part5-short
+          path: output/short.mp4
+          if-no-files-found: ignore
