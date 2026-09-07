@@ -2,7 +2,7 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    - cron: "0 6 * * *"  # প্রতিদিন UTC 06:00 (বাংলাদেশ/ভারত সময় বেলা ১২টা)
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -11,6 +11,7 @@ permissions:
 jobs:
   check-and-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,7 +25,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
 
       - name: Fix ImageMagick security policy for text rendering
-        run: sudo sed -i '/pattern="@\*"/d' /etc/ImageMagick-6/policy.xml
+        run: sudo sed -i '/pattern="@\*"/d' /etc/ImageMagick-6/policy.xml || true
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -32,23 +33,30 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Restore YouTube OAuth token
+      - name: Restore YouTube OAuth token if present
         env:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-        run: echo "$YOUTUBE_TOKEN_JSON" > token.json
+        run: |
+          if [ -n "$YOUTUBE_TOKEN_JSON" ]; then
+            printf '%s' "$YOUTUBE_TOKEN_JSON" > token.json
+            echo "Wrote token.json ($(wc -c < token.json) bytes)"
+          else
+            echo "No YOUTUBE_TOKEN_JSON secret — pipeline will stop after render"
+          fi
 
-      - name: Run daily check + full pipeline (Vyro/Whop -> AI -> render -> YouTube -> Instagram -> submit)
+      - name: Run daily pipeline (Parts 1-4 always; YouTube only if token is ready)
         env:
           VYRO_SESSION_COOKIE: ${{ secrets.VYRO_SESSION_COOKIE }}
           WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
           ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
           ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python daily_runner.py
 
-      - name: Upload rendered short as artifact (if any)
+      - name: Upload rendered short as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
