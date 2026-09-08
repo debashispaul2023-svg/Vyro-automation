@@ -189,15 +189,44 @@ def _resolve_source_clip(campaign: Campaign) -> str:
     raise RuntimeError("None of the candidate footage links in the reference document could be downloaded.")
 
 
+_SKIP_CAMPAIGN_MARKERS = (
+    "u2 -",
+    "street of dreams",
+    "geezerbomb",
+    "rockbottom",
+    "fifa + world cup",
+    "world cup edits",
+)
+
+
+def _is_blocked_example_campaign(campaign: Campaign) -> str | None:
+    """U2 was only a pipeline test. Never treat it as a production target."""
+    blob = f"{campaign.name or ''} {campaign.requirements_text or ''}".lower()
+    for marker in _SKIP_CAMPAIGN_MARKERS:
+        if marker in blob:
+            return marker
+    return None
+
+
 def _screen_campaign(platform: str, campaign: Campaign) -> bool:
-    """Returns True if the campaign passes the AI quality screen (or the
-    screen itself is unavailable, in which case we don't block on it)."""
+    """Keep campaigns that can work as Instagram Reels. Drop test/weak ones."""
+    blocked = _is_blocked_example_campaign(campaign)
+    if blocked:
+        print(
+            f"Skipping {platform} campaign '{campaign.name}': "
+            f"example/test marker '{blocked}'. Looking for a viral IG brief instead."
+        )
+        return False
+
     try:
-        score = ai_score_campaign(campaign.requirements_text or campaign.name)
+        score = ai_score_campaign(
+            f"NAME: {campaign.name}\n\n{campaign.requirements_text or campaign.name}"
+        )
     except AIBrainError as exc:
         print(f"AI campaign screening unavailable ({exc}); proceeding anyway.", file=sys.stderr)
         return True
 
+    print(f"AI screen ({platform}): good={score.is_good} — {score.reason}")
     if not score.is_good:
         print(f"Skipping {platform} campaign '{campaign.campaign_id}': {score.reason}")
         return False
@@ -284,6 +313,31 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
         return generate_metadata(hook=hook, summary=summary, req=req)
 
 
+def _relax_min_seconds_to_source(req: CampaignRequirements, source_path: str) -> None:
+    """Stop render from dying when AI parsed min=15 but the clip is 14.5s."""
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", source_path,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        source_dur = float((probe.stdout or "0").strip() or 0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Could not probe source duration ({exc}); render will use parsed min.")
+        return
+    if not source_dur:
+        return
+    if source_dur < req.min_seconds:
+        new_min = max(1.0, source_dur - 0.05)
+        print(
+            f"Source is {source_dur:.2f}s < parsed min {req.min_seconds}s "
+            f"— lowering min to {new_min:.2f}s"
+        )
+        req.min_seconds = new_min
+
+
 def process_campaign(platform: str, campaign: Campaign) -> int:
     req = _parse_requirements(campaign)
 
@@ -297,6 +351,7 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
     hook = campaign.name or "New campaign clip"
 
     try:
+        _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
         render_short(
             source_path=SOURCE_CLIP_PATH,
             output_path=OUTPUT_PATH,
