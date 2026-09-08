@@ -58,7 +58,11 @@ from playwright.sync_api import (
 CAMPAIGNS_CONFIG_PATH = "whop_campaigns.json"
 # TODO: confirm this exact URL if it doesn't match — best guess based on
 # the page heading "Discover Content Rewards" seen in screenshots.
-WHOP_DISCOVER_URL = "https://whop.com/discover/content-rewards/"
+WHOP_DISCOVER_URL = "https://whop.com/discover"
+WHOP_DISCOVER_URLS = (
+    "https://whop.com/discover",
+    "https://whop.com/discover/content-rewards/",
+)
 DEFAULT_TIMEOUT_MS = 20000
 COOKIE_DOMAIN = ".whop.com"
 
@@ -437,125 +441,140 @@ def _save_new_campaign_urls(new_urls: list[str]) -> None:
 
 
 def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
-    """
-    Visits Whop's public Discover page, looks at campaigns not already in
-    whop_campaigns.json, and joins up to `max_new` of them automatically.
-
-    `score_fn`, if given, should be a callable(requirements_text) -> object
-    with an `.is_good` bool attribute (matches ai_brain.CampaignScore) —
-    used to skip campaigns that look low-quality/scammy before joining.
-    Passed in as a parameter (rather than imported directly) to avoid a
-    circular import between whop_client.py and ai_brain.py.
-
-    Returns the list of campaign URLs that were newly joined this run (also
-    appended into whop_campaigns.json so future runs treat them as known).
-
-    ⚠️ This is the least-tested part of the whole pipeline — Whop's Discover
-    page card structure was only seen in screenshots, not inspected live,
-    so the selectors below are resilient text/role-based best guesses. On
-    failure this prints debug context to the logs so the next round can be
-    fixed from logs alone, the same way the rest of whop_client.py's
-    selectors were iteratively fixed.
-    """
+    """Join Instagram-friendly campaigns from the public Whop marketplace."""
     known_urls = {entry["url"] for entry in _load_configured_campaigns()}
     newly_joined: list[str] = []
+    prefer = ("roblox", "forgegui", "fortnite", "call of duty", "gaming", "pulp")
+    skip = (
+        "romance", "dating", "onlyfans", "model", "perreo", "blinkxliz",
+        "1win", "mybet", "betting", "casino", "geezerbomb", "street of dreams",
+    )
+
+    def _title_rank(text: str) -> int:
+        low = text.lower()
+        if any(s in low for s in skip):
+            return -1
+        for i, word in enumerate(prefer):
+            if word in low:
+                return 100 - i
+        return 1
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
-            _ensure_logged_in(page, WHOP_DISCOVER_URL)
-
-            # Wait for actual campaign cards to render (heavy SPA, same
-            # issue as the campaign detail page).
-            try:
-                page.get_by_text(re.compile(r"join campaign|view campaign", re.I)).first.wait_for(
-                    state="visible", timeout=12000
-                )
-            except PlaywrightTimeoutError:
-                print("[whop_client debug] Discover page campaign cards never appeared to load.")
-
-            # Each campaign is presented as a card; the visible "$X/1k views"
-            # rate text is a reasonably unique anchor per card. Collect
-            # candidate card containers via that text, then read each one's
-            # nearby heading for a name and check budget-used before
-            # deciding whether to open it.
-            card_texts = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-            card_count = min(card_texts.count(), 20)  # sane upper bound per run
-            print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover page.")
+            loaded = False
+            for url in WHOP_DISCOVER_URLS:
+                _ensure_logged_in(page, url)
+                page.wait_for_timeout(2500)
+                try:
+                    page.get_by_text(re.compile(r"discover content rewards|highest budget|clipping", re.I)).first.wait_for(
+                        timeout=12000
+                    )
+                except PlaywrightTimeoutError:
+                    print(f"[whop_client debug] Marketplace heading missing on {url}")
+                try:
+                    page.get_by_text(re.compile(r"^Clipping$", re.I)).first.click(timeout=3000)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                labels = page.get_by_text(re.compile(r"\$[\d.]+k?\s*/\s*\$?[\d.]+k|\$[\d.]+\s*/\s*1k", re.I))
+                n = labels.count()
+                print(f"[whop_client debug] {url} rate/budget labels: {n}")
+                if n > 0:
+                    loaded = True
+                    break
+            if not loaded:
+                print("[whop_client debug] Marketplace cards still not found.")
+                print("[whop_client debug] First 400 chars:", page.inner_text("body")[:400])
+                return newly_joined
 
             joined_this_run = 0
+            # Re-query after filter click.
+            labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
+            card_count = min(labels.count(), 16)
+            print(f"[whop_client debug] Found {card_count} marketplace rate labels.")
+
+            ranked: list[tuple[int, int, str]] = []
             for i in range(card_count):
+                try:
+                    snippet = labels.nth(i).locator("xpath=ancestor::a[1]|ancestor::article[1]|ancestor::div[3]").first.inner_text(timeout=3000)
+                except Exception:
+                    snippet = labels.nth(i).inner_text()
+                ranked.append((_title_rank(snippet), i, snippet[:180].replace("\n", " | ")))
+            ranked.sort(key=lambda row: row[0], reverse=True)
+
+            for rank, i, snippet in ranked:
                 if joined_this_run >= max_new:
                     break
+                if rank < 0:
+                    print(f"[whop_client debug] Skip blocked card #{i}: {snippet}")
+                    continue
+                print(f"[whop_client debug] Trying card #{i} rank={rank}: {snippet}")
                 try:
-                    card_texts.nth(i).scroll_into_view_if_needed(timeout=3000)
-                    card_texts.nth(i).click(timeout=3000)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[whop_client debug] Could not open Discover card #{i}: {exc}")
+                    labels.nth(i).click(timeout=5000)
+                    page.wait_for_timeout(2000)
+                except Exception as exc:
+                    print(f"[whop_client debug] Could not click card #{i}: {exc}")
                     continue
 
-                page.wait_for_timeout(1500)  # let the detail modal animate in
-
-                modal_text = page.inner_text("body")
-                if "not available in your region" in modal_text.lower():
-                    print(f"[whop_client debug] Card #{i} is region-locked, skipping.")
-                    _close_any_modal(page)
-                    continue
-
-                # Already-known campaign? Try to read its URL if the modal
-                # exposes one, else just check by visible name overlap —
-                # best effort, duplicates are harmless since
-                # check_configured_campaigns() de-dupes by campaign_id later.
-
+                body = ""
+                try:
+                    body = page.inner_text("body")[:4000]
+                except Exception:
+                    pass
                 if score_fn is not None:
                     try:
-                        score = score_fn(modal_text[:4000])
+                        score = score_fn(body or snippet)
+                        print(f"[whop_client debug] AI score card #{i}: good={score.is_good} {score.reason}")
                         if not score.is_good:
-                            print(f"[whop_client debug] AI skipped Discover card #{i}: {score.reason}")
-                            _close_any_modal(page)
+                            page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
+                            _settle(page)
+                            labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
                             continue
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[whop_client debug] AI scoring unavailable for card #{i} ({exc}); proceeding anyway.")
+                    except Exception as exc:
+                        print(f"[whop_client debug] AI scoring failed card #{i}: {exc}")
 
-                try:
-                    join_button = page.get_by_role("button", name=re.compile("join campaign", re.I)).first
-                    join_button.click(timeout=5000)
-                    page.wait_for_timeout(2000)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[whop_client debug] No 'Join Campaign' button on card #{i} (maybe already joined): {exc}")
-                    _close_any_modal(page)
+                clicked_join = False
+                for pattern in (r"join campaign", r"join now", r"^join$"):
+                    try:
+                        page.get_by_role("button", name=re.compile(pattern, re.I)).first.click(timeout=2500)
+                        clicked_join = True
+                        break
+                    except Exception:
+                        try:
+                            page.get_by_text(re.compile(pattern, re.I)).first.click(timeout=2500)
+                            clicked_join = True
+                            break
+                        except Exception:
+                            continue
+                if not clicked_join:
+                    print(f"[whop_client debug] No Join button on card #{i}")
+                    page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
+                    _settle(page)
+                    labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
                     continue
 
-                # After joining, Whop should navigate to (or reveal) the
-                # campaign's own dashboard URL under /app/campaigns/... —
-                # capture whatever URL we land on if it matches that pattern.
-                page.wait_for_timeout(1500)
-                if "/app/campaigns/" in page.url and page.url not in known_urls:
-                    known_urls.add(page.url)
-                    newly_joined.append(page.url)
+                page.wait_for_timeout(2500)
+                landed = page.url
+                if "/app/campaigns/" in landed and landed not in known_urls:
+                    known_urls.add(landed)
+                    newly_joined.append(landed)
                     joined_this_run += 1
-                    print(f"[whop_client debug] Joined new campaign: {page.url}")
+                    print(f"[whop_client debug] Joined: {landed}")
                 else:
-                    print(
-                        f"[whop_client debug] Joined card #{i} but landed on unexpected URL "
-                        f"({page.url}) — couldn't confirm the campaign dashboard link. "
-                        "You may need to add it to whop_campaigns.json manually this time."
-                    )
+                    print(f"[whop_client debug] After join, URL was {landed}")
 
-                # Go back to Discover for the next card.
                 page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
                 _settle(page)
-
+                labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
         finally:
             browser.close()
 
     if newly_joined:
         _save_new_campaign_urls(sorted(known_urls))
-
     return newly_joined
-
 
 def _close_any_modal(page: Page) -> None:
     """Best-effort: press Escape and/or click a close (X) button to dismiss
