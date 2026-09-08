@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from typing import Union
@@ -37,7 +38,14 @@ import requests
 
 from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
 from checker import ValidationError, validate_or_raise
-from google_doc_reader import GoogleDocReadError, fetch_google_doc_text, find_candidate_source_clips
+from clip_picker import ClipPickError, collect_clips_from_doc_text, download_drive_file, pick_best_clip
+from google_doc_reader import (
+    GoogleDocReadError,
+    extract_drive_file_id,
+    fetch_google_doc_text,
+    find_candidate_source_clips,
+    is_drive_folder_url,
+)
 from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
@@ -93,40 +101,89 @@ def _download_source_clip(url: str, dest_path: str) -> None:
             f.write(chunk)
 
 
+def _youtube_token_ready(token_path: str = "token.json") -> bool:
+    """True only if token.json is a real user token with refresh_token."""
+    if not os.path.isfile(token_path):
+        return False
+    try:
+        with open(token_path, encoding="utf-8") as f:
+            data = json.loads(f.read())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if data.get("installed") or data.get("web"):
+        return False
+    return bool(data.get("refresh_token") and (data.get("token") or data.get("access_token")))
+
+
 def _resolve_source_clip(campaign: Campaign) -> str:
-    """Returns a downloadable URL for the campaign's source footage. If the
-    campaign already has one (Vyro's usual case), use it directly. If it's
-    empty but the campaign links an external Google Doc (common on Whop),
-    fetch that doc and pull the first candidate video link out of it."""
-    if campaign.source_clip_url:
+    """Download the best source clip (Parts 3+4) into SOURCE_CLIP_PATH.
+
+    Vyro usually has campaign.source_clip_url. Whop usually has a Google Doc
+    that points at a Drive folder — list videos, score them, download winner.
+    """
+    os.makedirs(os.path.dirname(SOURCE_CLIP_PATH) or ".", exist_ok=True)
+    drive_key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+
+    if campaign.source_clip_url and not is_drive_folder_url(campaign.source_clip_url):
+        fid = extract_drive_file_id(campaign.source_clip_url)
+        if fid and drive_key:
+            download_drive_file(fid, SOURCE_CLIP_PATH, drive_key)
+            return campaign.source_clip_url
+        _download_source_clip(campaign.source_clip_url, SOURCE_CLIP_PATH)
         return campaign.source_clip_url
 
     reference_doc_url = getattr(campaign, "reference_doc_url", None)
-    if not reference_doc_url:
+    folder_or_doc = reference_doc_url or campaign.source_clip_url
+    if not folder_or_doc:
         raise RuntimeError(
             "No source clip URL and no reference document to resolve one "
             "from. This campaign may require footage you have to record/"
             "provide yourself, which this pipeline doesn't handle yet."
         )
 
-    try:
-        doc_text = fetch_google_doc_text(reference_doc_url)
-    except GoogleDocReadError as exc:
-        raise RuntimeError(f"Could not read the campaign's reference document: {exc}") from exc
+    doc_text = ""
+    if "docs.google.com/document" in folder_or_doc:
+        try:
+            doc_text = fetch_google_doc_text(folder_or_doc)
+        except GoogleDocReadError as exc:
+            raise RuntimeError(f"Could not read the campaign's reference document: {exc}") from exc
+    else:
+        doc_text = folder_or_doc
 
-    candidates = find_candidate_source_clips(doc_text)
+    clips = collect_clips_from_doc_text(doc_text)
+    if clips and drive_key:
+        try:
+            winner = pick_best_clip(
+                clips,
+                work_dir="work/daily",
+                api_key=drive_key,
+                campaign_notes=(campaign.requirements_text or campaign.name or "")[:2000],
+            )
+            shutil.copyfile(winner.local_path, SOURCE_CLIP_PATH)
+            return winner.clip.url
+        except ClipPickError as exc:
+            print(f"Best-clip picker failed ({exc}); falling back to first downloadable URL.", file=sys.stderr)
+
+    candidates = find_candidate_source_clips(doc_text) if doc_text else [folder_or_doc]
     if not candidates:
         raise RuntimeError(
             "The campaign's reference document didn't contain any "
             "recognizable footage link (Drive/YouTube/Dropbox/etc)."
         )
-
-    # Try each candidate until one actually downloads successfully.
     for candidate_url in candidates:
+        if is_drive_folder_url(candidate_url):
+            continue
         try:
+            fid = extract_drive_file_id(candidate_url)
+            if fid and drive_key:
+                download_drive_file(fid, SOURCE_CLIP_PATH, drive_key)
+                return candidate_url
             _download_source_clip(candidate_url, SOURCE_CLIP_PATH)
             return candidate_url
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"Download failed for {candidate_url}: {exc}", file=sys.stderr)
             continue
 
     raise RuntimeError("None of the candidate footage links in the reference document could be downloaded.")
@@ -258,12 +315,19 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
             req=req,
         )
 
+        if not _youtube_token_ready():
+            print(
+                "[4/5] YouTube token.json is missing or is still client_secrets. "
+                "Stopping after render (Parts 1-4 done). "
+                "Finish YouTube Phone Login, then re-run."
+            )
+            return 2
         result = upload_video(
             video_path=OUTPUT_PATH,
             title=meta.title,
             description=meta.description,
             tags=meta.tags,
-            privacy_status="public",
+            privacy_status="unlisted",
             token_path="token.json",
         )
         print(f"[4/5] Uploaded to YouTube: {result.video_url}")
@@ -320,6 +384,10 @@ def main() -> int:
     if status == 0:
         processed.add(campaign.campaign_id)
         _save_processed(processed)
+        return 0
+    if status == 2:
+        print("Parts 1-4 done. Campaign NOT marked processed until YouTube token works.")
+        return 0
     return status
 
 
