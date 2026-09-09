@@ -344,4 +344,320 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     except Exception:  # noqa: BLE001
         pass
 
-    # Reference material link (e.g.
+    # Reference material link (e.g. an external Google Doc with the real
+    # requirements + footage). On Whop this is often NOT a real <a href> —
+    # it's a clickable card that opens a new tab via JS. So: try a normal
+    # href scan first (cheap), and if that finds nothing, click the card
+    # and capture whichever URL the resulting new tab lands on.
+    reference_doc_url = None
+    try:
+        all_links = frame.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        for href in all_links:
+            if "docs.google.com" in href or "drive.google.com" in href:
+                reference_doc_url = href
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not reference_doc_url:
+        try:
+            reference_card = frame.get_by_text(
+                re.compile(r"edit\?usp=sharing|reference materials|resources|dos and don", re.I)
+            ).first
+            try:
+                # Case A: click opens a new tab.
+                with page.context.expect_page(timeout=4000) as new_page_info:
+                    reference_card.click(timeout=3000)
+                new_page = new_page_info.value
+                new_page.wait_for_load_state("domcontentloaded", timeout=8000)
+                candidate_url = new_page.url
+                if "docs.google.com" in candidate_url or "drive.google.com" in candidate_url:
+                    reference_doc_url = candidate_url
+                new_page.close()
+            except PlaywrightTimeoutError:
+                # Case B: no new tab appeared — maybe it navigated the
+                # current tab instead, or opened an in-page preview whose
+                # iframe/src we can read off the DOM.
+                page.wait_for_timeout(1000)
+                if "docs.google.com" in page.url or "drive.google.com" in page.url:
+                    reference_doc_url = page.url
+                    page.go_back(timeout=5000)
+                else:
+                    # Case C: look for an iframe preview embed pointing at
+                    # a Google Doc/Drive URL, which some card-preview UIs use.
+                    try:
+                        iframe_srcs = page.eval_on_selector_all("iframe[src]", "els => els.map(e => e.src)")
+                        for src in iframe_srcs:
+                            if "docs.google.com" in src or "drive.google.com" in src:
+                                reference_doc_url = src
+                                break
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[whop_client debug] Could not resolve reference doc link: {exc}")
+
+    if not reference_doc_url:
+        # Nothing worked — print a snippet of the page around "reference"/
+        # "dos" so the next failure's logs give enough context to fix this
+        # without needing another round of screenshots.
+        lower_body = body_text.lower()
+        for marker in ("reference", "dos", "google doc"):
+            idx = lower_body.find(marker)
+            if idx != -1:
+                snippet = body_text[max(0, idx - 80):idx + 200].replace("\n", " | ")
+                print(f"[whop_client debug] Context around '{marker}': ...{snippet}...")
+
+    # Which platforms this campaign accepts (icons shown near the submit
+    # button / in the submit form: TikTok, YouTube, Instagram).
+    platforms = []
+    for platform in ("tiktok", "youtube", "instagram"):
+        if platform in body_text.lower():
+            platforms.append(platform)
+
+    campaign_id = campaign_url.rstrip("/").split("/")[-1]
+
+    return WhopCampaign(
+        campaign_id=campaign_id,
+        name=name,
+        requirements_text=body_text[:4000],  # cap length; AI parser handles noisy text fine
+        source_clip_url="",  # resolved later via reference_doc_url if empty
+        submit_page_url=campaign_url,
+        reference_doc_url=reference_doc_url,
+        platforms=platforms or ["youtube"],
+    )
+
+
+def _save_new_campaign_urls(new_urls: list[str]) -> None:
+    """Appends newly auto-joined campaign URLs into whop_campaigns.json
+    (empty name_hint — auto-joined campaigns don't have one yet; add one
+    manually later if a specific campaign needs scroll-to-find help)."""
+    configured = _load_configured_campaigns()
+    existing_urls = {entry["url"] for entry in configured}
+    for url in new_urls:
+        if url not in existing_urls:
+            configured.append({"url": url, "name_hint": ""})
+    with open(CAMPAIGNS_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"joined_campaigns": configured}, f, indent=2)
+
+
+def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
+    """
+    Visits Whop's public Discover page, looks at campaigns not already in
+    whop_campaigns.json, and joins up to `max_new` of them automatically.
+
+    `score_fn`, if given, should be a callable(requirements_text) -> object
+    with an `.is_good` bool attribute (matches ai_brain.CampaignScore) —
+    used to skip campaigns that look low-quality/scammy before joining.
+    Passed in as a parameter (rather than imported directly) to avoid a
+    circular import between whop_client.py and ai_brain.py.
+
+    Returns the list of campaign URLs that were newly joined this run (also
+    appended into whop_campaigns.json so future runs treat them as known).
+
+    ⚠️ This is the least-tested part of the whole pipeline — Whop's Discover
+    page card structure was only seen in screenshots, not inspected live,
+    so the selectors below are resilient text/role-based best guesses. On
+    failure this prints debug context to the logs so the next round can be
+    fixed from logs alone, the same way the rest of whop_client.py's
+    selectors were iteratively fixed.
+    """
+    known_urls = {entry["url"] for entry in _load_configured_campaigns()}
+    newly_joined: list[str] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = _new_context_with_session(browser)
+        page = context.new_page()
+        try:
+            _ensure_logged_in(page, WHOP_DISCOVER_URL)
+
+            # Wait for actual campaign cards to render (heavy SPA, same
+            # issue as the campaign detail page).
+            try:
+                page.get_by_text(re.compile(r"join campaign|view campaign", re.I)).first.wait_for(
+                    state="visible", timeout=12000
+                )
+            except PlaywrightTimeoutError:
+                print("[whop_client debug] Discover page campaign cards never appeared to load.")
+
+            # Each campaign is presented as a card; the visible "$X/1k views"
+            # rate text is a reasonably unique anchor per card. Collect
+            # candidate card containers via that text, then read each one's
+            # nearby heading for a name and check budget-used before
+            # deciding whether to open it.
+            card_texts = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
+            card_count = min(card_texts.count(), 20)  # sane upper bound per run
+            print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover page.")
+
+            joined_this_run = 0
+            for i in range(card_count):
+                if joined_this_run >= max_new:
+                    break
+                try:
+                    card_texts.nth(i).scroll_into_view_if_needed(timeout=3000)
+                    card_texts.nth(i).click(timeout=3000)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[whop_client debug] Could not open Discover card #{i}: {exc}")
+                    continue
+
+                page.wait_for_timeout(1500)  # let the detail modal animate in
+
+                modal_text = page.inner_text("body")
+                if "not available in your region" in modal_text.lower():
+                    print(f"[whop_client debug] Card #{i} is region-locked, skipping.")
+                    _close_any_modal(page)
+                    continue
+
+                # Already-known campaign? Try to read its URL if the modal
+                # exposes one, else just check by visible name overlap —
+                # best effort, duplicates are harmless since
+                # check_configured_campaigns() de-dupes by campaign_id later.
+
+                if score_fn is not None:
+                    try:
+                        score = score_fn(modal_text[:4000])
+                        if not score.is_good:
+                            print(f"[whop_client debug] AI skipped Discover card #{i}: {score.reason}")
+                            _close_any_modal(page)
+                            continue
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[whop_client debug] AI scoring unavailable for card #{i} ({exc}); proceeding anyway.")
+
+                try:
+                    join_button = page.get_by_role("button", name=re.compile("join campaign", re.I)).first
+                    join_button.click(timeout=5000)
+                    page.wait_for_timeout(2000)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[whop_client debug] No 'Join Campaign' button on card #{i} (maybe already joined): {exc}")
+                    _close_any_modal(page)
+                    continue
+
+                # After joining, Whop should navigate to (or reveal) the
+                # campaign's own dashboard URL under /app/campaigns/... —
+                # capture whatever URL we land on if it matches that pattern.
+                page.wait_for_timeout(1500)
+                if "/app/campaigns/" in page.url and page.url not in known_urls:
+                    known_urls.add(page.url)
+                    newly_joined.append(page.url)
+                    joined_this_run += 1
+                    print(f"[whop_client debug] Joined new campaign: {page.url}")
+                else:
+                    print(
+                        f"[whop_client debug] Joined card #{i} but landed on unexpected URL "
+                        f"({page.url}) — couldn't confirm the campaign dashboard link. "
+                        "You may need to add it to whop_campaigns.json manually this time."
+                    )
+
+                # Go back to Discover for the next card.
+                page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
+                _settle(page)
+
+        finally:
+            browser.close()
+
+    if newly_joined:
+        _save_new_campaign_urls(sorted(known_urls))
+
+    return newly_joined
+
+
+def _close_any_modal(page: Page) -> None:
+    """Best-effort: press Escape and/or click a close (X) button to dismiss
+    whatever modal/overlay might currently be open, before moving on."""
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def check_configured_campaigns() -> Optional[WhopCampaign]:
+    """Checks every campaign listed in whop_campaigns.json and returns the
+    first usable one found (not region-locked, not budget-exhausted).
+    Returns None if none are usable right now."""
+    configured = _load_configured_campaigns()
+    if not configured:
+        return None
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = _new_context_with_session(browser)
+        page = context.new_page()
+        try:
+            for entry in configured:
+                url = entry["url"]
+                name_hint = entry.get("name_hint", "")
+                _ensure_logged_in(page, url)
+                campaign = _extract_campaign_details(page, url, name_hint=name_hint)
+                if campaign is not None:
+                    return campaign
+            return None
+        finally:
+            browser.close()
+
+
+def _select_platform_icon(frame, video_url: str) -> None:
+    """The submit form has TikTok/YouTube/Instagram icon buttons near the
+    top — click whichever matches the video URL's domain. `frame` can be a
+    Page or a Frame (both support the same locator API)."""
+    lower = video_url.lower()
+    if "tiktok.com" in lower:
+        platform_name = "tiktok"
+    elif "youtube.com" in lower or "youtu.be" in lower:
+        platform_name = "youtube"
+    elif "instagram.com" in lower:
+        platform_name = "instagram"
+    else:
+        return  # unknown platform, let Whop auto-detect if it can
+
+    try:
+        frame.get_by_role("button", name=re.compile(platform_name, re.I)).click(timeout=3000)
+    except Exception:  # noqa: BLE001
+        pass  # not critical — Whop may auto-detect the platform from the URL
+
+
+def submit_video_link(campaign: WhopCampaign, video_url: str) -> None:
+    """Opens the campaign page, opens the 'Submit clip' form, fills in the
+    video link, checks the required confirmation checkbox, and submits."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = _new_context_with_session(browser)
+        page = context.new_page()
+        try:
+            _ensure_logged_in(page, campaign.submit_page_url)
+            frame = _get_content_frame(page)  # the campaign app likely lives in an iframe (see comment on _get_content_frame)
+
+            # Open the "Submit clip" modal.
+            frame.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
+            page.wait_for_timeout(1000)  # let the modal animate in
+
+            _select_platform_icon(frame, video_url)
+
+            # The URL input field (placeholder mentions tiktok.com/youtube/instagram).
+            url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
+            url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
+
+            # Required "I've read the requirements..." checkbox.
+            try:
+                frame.get_by_role("checkbox").first.check(timeout=3000)
+            except Exception:  # noqa: BLE001
+                # fall back to clicking the text label if the checkbox role isn't picked up
+                frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+
+            # Final submit button inside the modal (same label, second instance).
+            frame.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
+            _settle(page)
+        except PlaywrightTimeoutError as exc:
+            raise WhopClientError(f"Submission failed — a step timed out. Details: {exc}") from exc
+        finally:
+            browser.close()
+
+
+if __name__ == "__main__":
+    found = check_configured_campaigns()
+    if found is None:
+        print("No usable configured campaign found.")
+    else:
+        print(f"Campaign: {found.campaign_id} — {found.name}")
+        print(f"Platforms: {found.platforms}")
+        print(f"Reference doc: {found.reference_doc_url}")
