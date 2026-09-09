@@ -224,14 +224,34 @@ class CampaignScore:
 
 
 _SCORE_PROMPT = """\
-You are screening a video-clipping campaign brief before a creator commits \
-time to it. Flag it as LOW QUALITY if it shows signs of being a scam or \
-not worth the effort: vague or contradictory rules, asks for sensitive \
-personal/financial information beyond a normal payout method, promises \
-unrealistic payouts, has no clear content/duration rules at all, or reads \
-as spam/gibberish/mostly unrelated navigation text with no real campaign \
-content. Otherwise mark it GOOD — normal campaigns with clear (even \
-strict) rules are fine, being strict is not the same as being a scam.
+You are screening a video-clipping campaign brief for a creator whose goal
+is genuine virality on Instagram/YouTube Shorts/TikTok — content people
+share because it's funny, surprising, satisfying, or dramatic, not
+because of a licensed song or a sports league's official highlights.
+
+Mark it LOW QUALITY (reject) if ANY of these apply:
+  - It centers on sports footage tied to official/licensed music or a
+    league's branded audio (e.g. "FIFA + World Cup Edits", official
+    anthem/song requirements) — these have low organic virality and high
+    copyright-strike risk regardless of payout.
+  - It's a one-off test/leftover listing rather than a real live
+    campaign (e.g. anything that reads like "U2", "Geezerbomb",
+    "Rockbottom", "world cup edits" — these are known dead test
+    campaigns, always reject them outright if mentioned).
+  - It's romance/dating/adult-themed content of any kind (not
+    appropriate to pursue).
+  - It shows scam signs: vague/contradictory rules, asks for sensitive
+    personal/financial info beyond a normal payout method, unrealistic
+    payout promises, no real content rules, or reads as spam/gibberish/
+    nav-junk with no real campaign content.
+  - Its budget is already fully used up (e.g. "100% used", "$0
+    remaining").
+
+Mark it GOOD if it's a real, live, clearly-ruled campaign about content
+with genuine share-appeal: comedy, gaming, satisfying/oddly-satisfying
+clips, surprising reveals, clean general entertainment, relatable
+everyday moments, or similar — where the creator's own edit/hook does the
+work, not a licensed song or sports-league branding.
 
 Campaign requirements text:
 \"\"\"
