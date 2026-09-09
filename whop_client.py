@@ -396,13 +396,10 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
-            _ensure_logged_in(page, WHOP_DISCOVER_URL)
-            try:
-                page.get_by_text(re.compile(r"join campaign|view campaign", re.I)).first.wait_for(
-                    state="visible", timeout=12000
-                )
+                _ensure_logged_in(page, WHOP_DISCOVER_URL)
             except PlaywrightTimeoutError:
-                print("[whop_client debug] Discover page campaign cards never appeared to load.")
+                print("[whop_client debug] Discover page timed out — skipping auto-join.")
+                return newly_joined
 
             card_texts = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
             card_count = min(card_texts.count(), 20)
