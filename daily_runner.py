@@ -249,9 +249,8 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
         newly_joined = whop_discover_and_join_new_campaigns(score_fn=ai_score_campaign, max_new=2)
         if newly_joined:
             print(f"Auto-joined {len(newly_joined)} new Whop campaign(s): {newly_joined}")
-    except WhopClientError as exc:
+    except Exception as exc:
         print(f"Whop auto-discovery/join failed: {exc}", file=sys.stderr)
-
     try:
         whop_campaign = whop_check_configured_campaigns()
     except WhopClientError as exc:
