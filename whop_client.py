@@ -161,28 +161,13 @@ def _ensure_logged_in(page: Page, target_url: str) -> None:
 
 
 def _get_content_frame(page: Page):
-    """
-    Whop hosts third-party campaign apps (like this one — the URL contains
-    'exp_...', Whop's marker for an embedded app extension) inside an
-    <iframe>. page.inner_text("body") on the main page only sees Whop's
-    OWN outer shell (search bar, balance, notification counts) — not the
-    actual campaign content, which lives inside that iframe's separate
-    document.
-
-    There can be MULTIPLE iframes though — e.g. hidden tracking/pixel
-    script iframes (TikTok/Meta conversion tracking) that also happen to
-    have a lot of "text" (their raw JS source). So it's not enough to pick
-    the iframe with the most text — we specifically look for one whose
-    text contains real campaign UI words ("submit clip", "budget",
-    "requirement", etc), and skip anything that looks like injected script
-    source (starts with "(function", "!function", etc).
-    """
+    """Pick the campaign iframe. Never prefer the in-app Discover feed."""
     CONTENT_MARKERS = ("submit clip", "budget", "requirement", "campaign", "views", "dos")
     SCRIPT_LOOKING_PREFIXES = ("(function", "!function", "window.", "var ", "const ", "let ")
 
     try:
-        page.wait_for_timeout(1500)  # give iframes a moment to attach
-        best_candidate = None
+        page.wait_for_timeout(1500)
+        ranked = []
         for frame in page.frames:
             if frame == page.main_frame:
                 continue
@@ -190,29 +175,28 @@ def _get_content_frame(page: Page):
                 text = frame.inner_text("body", timeout=3000)
             except Exception:  # noqa: BLE001
                 continue
-
             stripped = text.strip()
             if not stripped or stripped.startswith(SCRIPT_LOOKING_PREFIXES):
-                continue  # looks like a script-injection artifact, not real UI
-
+                continue
             lower = stripped.lower()
+            url = (frame.url or "").lower()
             marker_hits = sum(1 for marker in CONTENT_MARKERS if marker in lower)
-            if marker_hits > 0:
-                print(
-                    f"[whop_client debug] Frame {frame.url} matched {marker_hits} content "
-                    f"markers, {len(text)} chars — using this one."
-                )
-                return frame
-
-            if best_candidate is None and len(stripped) > 100:
-                best_candidate = frame  # keep as a weak fallback only
-
-        if best_candidate is not None:
+            score = marker_hits * 10 + min(len(stripped), 5000) // 200
+            if "submit clip" in lower:
+                score += 25
+            if "/campaigns/" in url:
+                score += 40
+            if "/discover" in url and "/campaigns/" not in url:
+                score -= 80
             print(
-                f"[whop_client debug] No frame matched content markers; falling back to "
-                f"largest non-script frame: {best_candidate.url}"
+                f"[whop_client debug] Frame {frame.url} markers={marker_hits} "
+                f"chars={len(stripped)} score={score}"
             )
-            return best_candidate
+            ranked.append((score, frame))
+        ranked.sort(key=lambda row: row[0], reverse=True)
+        if ranked and ranked[0][0] > 0:
+            print(f"[whop_client debug] Using frame {ranked[0][1].url}")
+            return ranked[0][1]
     except Exception as exc:  # noqa: BLE001
         print(f"[whop_client debug] Iframe detection failed: {exc}")
 
@@ -240,6 +224,22 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         print(f"[whop_client debug] Campaign content never appeared on the main page for {campaign_url} (checking iframes next).")
 
     frame = _get_content_frame(page)
+    uuid_match = re.search(
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        campaign_url,
+        re.I,
+    )
+    if uuid_match and "/discover" in (frame.url or "").lower():
+        cid = uuid_match.group(1)
+        base = (frame.url or "").split("/discover")[0]
+        target = f"{base}/campaigns/{cid}"
+        print(f"[whop_client debug] Discover iframe hijacked the page — opening {target}")
+        try:
+            frame.goto(target, timeout=20000)
+            page.wait_for_timeout(2500)
+            frame = _get_content_frame(page)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[whop_client debug] Iframe goto failed: {exc}")
     body_text = frame.inner_text("body")
     print(f"[whop_client debug] Captured {len(body_text)} chars. First 300: {body_text[:300]!r}")
 
@@ -325,7 +325,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     if "not available in your region" in body_text.lower():
         return None
 
-    # "$9.7K / $25K" style budget-used line — if it looks like ~100% used,
+    # "$9.7K / $25K" style budget-used line — if it looks like \~100% used,
     # skip (no point submitting to an exhausted campaign).
     budget_match = re.search(r"\$([\d.]+)K?\s*/\s*\$([\d.]+)K", body_text)
     if budget_match:
@@ -344,335 +344,4 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     except Exception:  # noqa: BLE001
         pass
 
-    # Reference material link (e.g. an external Google Doc with the real
-    # requirements + footage). On Whop this is often NOT a real <a href> —
-    # it's a clickable card that opens a new tab via JS. So: try a normal
-    # href scan first (cheap), and if that finds nothing, click the card
-    # and capture whichever URL the resulting new tab lands on.
-    reference_doc_url = None
-    try:
-        all_links = frame.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        for href in all_links:
-            if "docs.google.com" in href or "drive.google.com" in href:
-                reference_doc_url = href
-                break
-    except Exception:  # noqa: BLE001
-        pass
-
-    if not reference_doc_url:
-        try:
-            reference_card = frame.get_by_text(
-                re.compile(r"edit\?usp=sharing|reference materials|resources|dos and don", re.I)
-            ).first
-            try:
-                # Case A: click opens a new tab.
-                with page.context.expect_page(timeout=4000) as new_page_info:
-                    reference_card.click(timeout=3000)
-                new_page = new_page_info.value
-                new_page.wait_for_load_state("domcontentloaded", timeout=8000)
-                candidate_url = new_page.url
-                if "docs.google.com" in candidate_url or "drive.google.com" in candidate_url:
-                    reference_doc_url = candidate_url
-                new_page.close()
-            except PlaywrightTimeoutError:
-                # Case B: no new tab appeared — maybe it navigated the
-                # current tab instead, or opened an in-page preview whose
-                # iframe/src we can read off the DOM.
-                page.wait_for_timeout(1000)
-                if "docs.google.com" in page.url or "drive.google.com" in page.url:
-                    reference_doc_url = page.url
-                    page.go_back(timeout=5000)
-                else:
-                    # Case C: look for an iframe preview embed pointing at
-                    # a Google Doc/Drive URL, which some card-preview UIs use.
-                    try:
-                        iframe_srcs = page.eval_on_selector_all("iframe[src]", "els => els.map(e => e.src)")
-                        for src in iframe_srcs:
-                            if "docs.google.com" in src or "drive.google.com" in src:
-                                reference_doc_url = src
-                                break
-                    except Exception:  # noqa: BLE001
-                        pass
-        except Exception as exc:  # noqa: BLE001
-            print(f"[whop_client debug] Could not resolve reference doc link: {exc}")
-
-    if not reference_doc_url:
-        # Nothing worked — print a snippet of the page around "reference"/
-        # "dos" so the next failure's logs give enough context to fix this
-        # without needing another round of screenshots.
-        lower_body = body_text.lower()
-        for marker in ("reference", "dos", "google doc"):
-            idx = lower_body.find(marker)
-            if idx != -1:
-                snippet = body_text[max(0, idx - 80):idx + 200].replace("\n", " | ")
-                print(f"[whop_client debug] Context around '{marker}': ...{snippet}...")
-
-    # Which platforms this campaign accepts (icons shown near the submit
-    # button / in the submit form: TikTok, YouTube, Instagram).
-    platforms = []
-    for platform in ("tiktok", "youtube", "instagram"):
-        if platform in body_text.lower():
-            platforms.append(platform)
-
-    campaign_id = campaign_url.rstrip("/").split("/")[-1]
-
-    return WhopCampaign(
-        campaign_id=campaign_id,
-        name=name,
-        requirements_text=body_text[:4000],  # cap length; AI parser handles noisy text fine
-        source_clip_url="",  # resolved later via reference_doc_url if empty
-        submit_page_url=campaign_url,
-        reference_doc_url=reference_doc_url,
-        platforms=platforms or ["youtube"],
-    )
-
-
-def _save_new_campaign_urls(new_urls: list[str]) -> None:
-    """Appends newly auto-joined campaign URLs into whop_campaigns.json
-    (empty name_hint — auto-joined campaigns don't have one yet; add one
-    manually later if a specific campaign needs scroll-to-find help)."""
-    configured = _load_configured_campaigns()
-    existing_urls = {entry["url"] for entry in configured}
-    for url in new_urls:
-        if url not in existing_urls:
-            configured.append({"url": url, "name_hint": ""})
-    with open(CAMPAIGNS_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"joined_campaigns": configured}, f, indent=2)
-
-
-def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
-    """Join Instagram-friendly campaigns from the public Whop marketplace."""
-    known_urls = {entry["url"] for entry in _load_configured_campaigns()}
-    newly_joined: list[str] = []
-    prefer = ("roblox", "forgegui", "fortnite", "call of duty", "gaming", "pulp")
-    skip = (
-        "romance", "dating", "onlyfans", "model", "perreo", "blinkxliz",
-        "1win", "mybet", "betting", "casino", "geezerbomb", "street of dreams",
-    )
-
-    def _title_rank(text: str) -> int:
-        low = text.lower()
-        if any(s in low for s in skip):
-            return -1
-        for i, word in enumerate(prefer):
-            if word in low:
-                return 100 - i
-        return 1
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = _new_context_with_session(browser)
-        page = context.new_page()
-        try:
-            loaded = False
-            for url in WHOP_DISCOVER_URLS:
-                _ensure_logged_in(page, url)
-                page.wait_for_timeout(2500)
-                try:
-                    page.get_by_text(re.compile(r"discover content rewards|highest budget|clipping", re.I)).first.wait_for(
-                        timeout=12000
-                    )
-                except PlaywrightTimeoutError:
-                    print(f"[whop_client debug] Marketplace heading missing on {url}")
-                try:
-                    page.get_by_text(re.compile(r"^Clipping$", re.I)).first.click(timeout=3000)
-                    page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-                labels = page.get_by_text(re.compile(r"\$[\d.]+k?\s*/\s*\$?[\d.]+k|\$[\d.]+\s*/\s*1k", re.I))
-                n = labels.count()
-                print(f"[whop_client debug] {url} rate/budget labels: {n}")
-                if n > 0:
-                    loaded = True
-                    break
-            if not loaded:
-                print("[whop_client debug] Marketplace cards still not found.")
-                print("[whop_client debug] First 400 chars:", page.inner_text("body")[:400])
-                return newly_joined
-
-            joined_this_run = 0
-            # Re-query after filter click.
-            labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-            card_count = min(labels.count(), 16)
-            print(f"[whop_client debug] Found {card_count} marketplace rate labels.")
-
-            ranked: list[tuple[int, int, str]] = []
-            for i in range(card_count):
-                try:
-                    snippet = labels.nth(i).locator("xpath=ancestor::a[1]|ancestor::article[1]|ancestor::div[3]").first.inner_text(timeout=3000)
-                except Exception:
-                    snippet = labels.nth(i).inner_text()
-                ranked.append((_title_rank(snippet), i, snippet[:180].replace("\n", " | ")))
-            ranked.sort(key=lambda row: row[0], reverse=True)
-
-            for rank, i, snippet in ranked:
-                if joined_this_run >= max_new:
-                    break
-                if rank < 0:
-                    print(f"[whop_client debug] Skip blocked card #{i}: {snippet}")
-                    continue
-                print(f"[whop_client debug] Trying card #{i} rank={rank}: {snippet}")
-                try:
-                    labels.nth(i).click(timeout=5000)
-                    page.wait_for_timeout(2000)
-                except Exception as exc:
-                    print(f"[whop_client debug] Could not click card #{i}: {exc}")
-                    continue
-
-                body = ""
-                try:
-                    body = page.inner_text("body")[:4000]
-                except Exception:
-                    pass
-                if score_fn is not None:
-                    try:
-                        score = score_fn(body or snippet)
-                        print(f"[whop_client debug] AI score card #{i}: good={score.is_good} {score.reason}")
-                        if not score.is_good:
-                            page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
-                            _settle(page)
-                            labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-                            continue
-                    except Exception as exc:
-                        print(f"[whop_client debug] AI scoring failed card #{i}: {exc}")
-
-                clicked_join = False
-                for pattern in (r"join campaign", r"join now", r"^join$"):
-                    try:
-                        page.get_by_role("button", name=re.compile(pattern, re.I)).first.click(timeout=2500)
-                        clicked_join = True
-                        break
-                    except Exception:
-                        try:
-                            page.get_by_text(re.compile(pattern, re.I)).first.click(timeout=2500)
-                            clicked_join = True
-                            break
-                        except Exception:
-                            continue
-                if not clicked_join:
-                    print(f"[whop_client debug] No Join button on card #{i}")
-                    page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
-                    _settle(page)
-                    labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-                    continue
-
-                page.wait_for_timeout(2500)
-                landed = page.url
-                if "/app/campaigns/" in landed and landed not in known_urls:
-                    known_urls.add(landed)
-                    newly_joined.append(landed)
-                    joined_this_run += 1
-                    print(f"[whop_client debug] Joined: {landed}")
-                else:
-                    print(f"[whop_client debug] After join, URL was {landed}")
-
-                page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
-                _settle(page)
-                labels = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-        finally:
-            browser.close()
-
-    if newly_joined:
-        _save_new_campaign_urls(sorted(known_urls))
-    return newly_joined
-
-def _close_any_modal(page: Page) -> None:
-    """Best-effort: press Escape and/or click a close (X) button to dismiss
-    whatever modal/overlay might currently be open, before moving on."""
-    try:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def check_configured_campaigns() -> Optional[WhopCampaign]:
-    """Checks every campaign listed in whop_campaigns.json and returns the
-    first usable one found (not region-locked, not budget-exhausted).
-    Returns None if none are usable right now."""
-    configured = _load_configured_campaigns()
-    if not configured:
-        return None
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = _new_context_with_session(browser)
-        page = context.new_page()
-        try:
-            for entry in configured:
-                url = entry["url"]
-                name_hint = entry.get("name_hint", "")
-                _ensure_logged_in(page, url)
-                campaign = _extract_campaign_details(page, url, name_hint=name_hint)
-                if campaign is not None:
-                    return campaign
-            return None
-        finally:
-            browser.close()
-
-
-def _select_platform_icon(frame, video_url: str) -> None:
-    """The submit form has TikTok/YouTube/Instagram icon buttons near the
-    top — click whichever matches the video URL's domain. `frame` can be a
-    Page or a Frame (both support the same locator API)."""
-    lower = video_url.lower()
-    if "tiktok.com" in lower:
-        platform_name = "tiktok"
-    elif "youtube.com" in lower or "youtu.be" in lower:
-        platform_name = "youtube"
-    elif "instagram.com" in lower:
-        platform_name = "instagram"
-    else:
-        return  # unknown platform, let Whop auto-detect if it can
-
-    try:
-        frame.get_by_role("button", name=re.compile(platform_name, re.I)).click(timeout=3000)
-    except Exception:  # noqa: BLE001
-        pass  # not critical — Whop may auto-detect the platform from the URL
-
-
-def submit_video_link(campaign: WhopCampaign, video_url: str) -> None:
-    """Opens the campaign page, opens the 'Submit clip' form, fills in the
-    video link, checks the required confirmation checkbox, and submits."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = _new_context_with_session(browser)
-        page = context.new_page()
-        try:
-            _ensure_logged_in(page, campaign.submit_page_url)
-            frame = _get_content_frame(page)  # the campaign app likely lives in an iframe (see comment on _get_content_frame)
-
-            # Open the "Submit clip" modal.
-            frame.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
-            page.wait_for_timeout(1000)  # let the modal animate in
-
-            _select_platform_icon(frame, video_url)
-
-            # The URL input field (placeholder mentions tiktok.com/youtube/instagram).
-            url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
-            url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
-
-            # Required "I've read the requirements..." checkbox.
-            try:
-                frame.get_by_role("checkbox").first.check(timeout=3000)
-            except Exception:  # noqa: BLE001
-                # fall back to clicking the text label if the checkbox role isn't picked up
-                frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
-
-            # Final submit button inside the modal (same label, second instance).
-            frame.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
-            _settle(page)
-        except PlaywrightTimeoutError as exc:
-            raise WhopClientError(f"Submission failed — a step timed out. Details: {exc}") from exc
-        finally:
-            browser.close()
-
-
-if __name__ == "__main__":
-    found = check_configured_campaigns()
-    if found is None:
-        print("No usable configured campaign found.")
-    else:
-        print(f"Campaign: {found.campaign_id} — {found.name}")
-        print(f"Platforms: {found.platforms}")
-        print(f"Reference doc: {found.reference_doc_url}")
+    # Reference material link (e.g.
