@@ -119,27 +119,143 @@ def _clip_from_drive_item(item: dict[str, Any], *, file_id: str | None = None) -
     )
 
 
-def fetch_google_doc_text(doc_url: str) -> str:
-    """Fetches the plain-text content of a publicly viewable Google Doc."""
-    doc_id = _extract_doc_id(doc_url)
-    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
 
-    resp = requests.get(export_url, timeout=30)
+
+def _unwrap_google_redirect(url: str) -> str:
+    """docs.google.com wraps real hrefs as https://www.google.com/url?q=..."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    if "google.com/url" not in url or "q=" not in url:
+        return url
+    qs = parse_qs(urlparse(url).query)
+    real = (qs.get("q") or [""])[0]
+    return unquote(real) if real else url
+
+
+def _html_export_links(doc_id: str) -> list[str]:
+    """TXT export drops hyperlinks. HTML export keeps the real hrefs."""
+    from html import unescape
+
+    resp = requests.get(
+        f"https://docs.google.com/document/d/{doc_id}/export?format=html",
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return []
+    links: list[str] = []
+    for raw in re.findall(r'href="([^"]+)"', resp.text):
+        url = _unwrap_google_redirect(unescape(raw)).rstrip(".,;:)")
+        if url.startswith("http"):
+            links.append(url)
+    return links
+
+
+def fetch_google_doc_text(doc_url: str) -> str:
+    """Fetches a public Google Doc as text, plus hidden hyperlink URLs."""
+    doc_id = _extract_doc_id(doc_url)
+    resp = requests.get(
+        f"https://docs.google.com/document/d/{doc_id}/export?format=txt",
+        timeout=30,
+    )
     if resp.status_code != 200:
         raise GoogleDocReadError(
             f"Could not fetch Google Doc (status {resp.status_code}). "
             "It may not be shared as 'Anyone with the link can view'."
         )
-    return resp.text
+    text = resp.text
+    extra = _html_export_links(doc_id)
+    if extra:
+        print(f"[doc] HTML export found {len(extra)} hyperlink(s): {extra[:5]}")
+        text = text + "\n" + "\n".join(extra)
+    return text
 
 
 def extract_urls(text: str) -> list[str]:
     """Pulls out every URL mentioned in a block of text, in order."""
-    return _URL_PATTERN.findall(text)
+    return [_unwrap_google_redirect(u) for u in _URL_PATTERN.findall(text)]
+
+
+def download_mediasilo_review(review_url: str, dest_path: str) -> str:
+    """Open a public MediaSilo review link and save the first real video file.
+
+    MediaSilo is a JS app — there is no Drive-style file list. We intercept
+    mp4/m3u8 network responses after the gallery loads.
+    """
+    from playwright.sync_api import sync_playwright
+
+    hits: list[str] = []
+
+    def _on_response(resp) -> None:
+        url = resp.url or ""
+        low = url.lower()
+        ctype = (resp.headers or {}).get("content-type", "").lower()
+        if resp.status != 200:
+            return
+        if (
+            ".mp4" in low
+            or "video/" in ctype
+            or "application/vnd.apple.mpegurl" in ctype
+            or ".m3u8" in low
+        ):
+            if url not in hits:
+                hits.append(url)
+
+    print(f"[mediasilo] opening {review_url}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.on("response", _on_response)
+        try:
+            page.goto(review_url, timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(6000)
+            for sel in ("video", "[class*='thumb']", "[class*='asset']", "img"):
+                try:
+                    page.locator(sel).first.click(timeout=2500)
+                    page.wait_for_timeout(4000)
+                    break
+                except Exception:
+                    continue
+            page.wait_for_timeout(4000)
+        finally:
+            browser.close()
+
+    print(f"[mediasilo] intercepted {len(hits)} media URL(s)")
+    if not hits:
+        raise GoogleDocReadError(
+            f"Opened MediaSilo review but no downloadable video appeared. "
+            f"The share may have downloads disabled: {review_url}"
+        )
+
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+    last_err = None
+    for media_url in hits:
+        if ".m3u8" in media_url.lower():
+            result = __import__("subprocess").run(
+                ["yt-dlp", "-f", "mp4/best", "-o", dest_path, media_url],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0 and os.path.isfile(dest_path):
+                return media_url
+            last_err = result.stderr[-300:] if result.stderr else "yt-dlp failed"
+            continue
+        try:
+            r = requests.get(media_url, stream=True, timeout=120)
+            r.raise_for_status()
+            with open(dest_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    f.write(chunk)
+            if os.path.isfile(dest_path) and os.path.getsize(dest_path) > 10000:
+                return media_url
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    raise GoogleDocReadError(f"MediaSilo video download failed: {last_err}")
 
 
 def find_candidate_source_clips(doc_text: str) -> list[str]:
-    """Raw URL candidates from doc text (may still include Drive folders)."""
+
+    """Raw URL candidates from doc text (Drive, MediaSilo, YouTube, etc)."""
     urls = extract_urls(doc_text)
     candidates = []
     seen: set[str] = set()
@@ -150,6 +266,8 @@ def find_candidate_source_clips(doc_text: str) -> list[str]:
             marker in lower
             for marker in (
                 "drive.google.com",
+                "mediasilo.com",
+                "frame.io",
                 ".mp4",
                 "dropbox.com",
                 "wetransfer.com",
@@ -280,6 +398,7 @@ def collect_video_clips_in_drive_folder(
             other_files.append(clip)
 
     if clips:
+        # de-dupe by file_id, keep first
         seen: set[str] = set()
         unique: list[DriveClip] = []
         for clip in clips:
@@ -311,6 +430,7 @@ def find_videos_in_drive_folder(
     ]
 
 
+
 def resolve_candidate_source_clips(
     doc_text: str,
     *,
@@ -335,6 +455,124 @@ def resolve_candidate_source_clips(
             resolved.append(url)
 
     return resolved
+
+
+def classify_footage_url(url: str) -> str:
+    """Which adapter should handle this URL."""
+    low = (url or "").lower()
+    if is_drive_folder_url(url):
+        return "drive_folder"
+    if extract_drive_file_id(url):
+        return "drive_file"
+    if "mediasilo.com" in low:
+        return "mediasilo"
+    if "youtube.com" in low or "youtu.be" in low:
+        return "youtube"
+    if "vimeo.com" in low:
+        return "vimeo"
+    if "frame.io" in low:
+        return "frameio"
+    if "dropbox.com" in low or "wetransfer.com" in low or "we.tl/" in low:
+        return "file_host"
+    path = low.split("?", 1)[0]
+    if any(path.endswith(ext) for ext in _VIDEO_EXTENSIONS):
+        return "direct"
+    return "unknown"
+
+
+def gather_brief_text(source: str) -> str:
+    """Campaign URL / Google Doc / raw brief → text that includes hidden hrefs."""
+    if source and "docs.google.com/document" in source:
+        return fetch_google_doc_text(source)
+    return source or ""
+
+
+def resolve_and_download_footage(
+    *,
+    dest_path: str,
+    source_clip_url: str = "",
+    reference_doc_url: str = "",
+    brief_text: str = "",
+    download_url_fn=None,
+    download_drive_fn=None,
+    pick_drive_folder_fn=None,
+) -> str:
+    """One entry point: read the brief, pick an adapter, download a clip.
+
+    Returns the source URL that was downloaded into dest_path.
+    Unknown hosts raise GoogleDocReadError so the daily run can skip
+    the campaign instead of crashing.
+    """
+    blob = "\n".join(x for x in (source_clip_url, reference_doc_url, brief_text) if x)
+    if reference_doc_url and "docs.google.com/document" in reference_doc_url:
+        try:
+            blob = blob + "\n" + fetch_google_doc_text(reference_doc_url)
+        except GoogleDocReadError as exc:
+            print(f"[resolver] doc fetch failed ({exc}); using page text only")
+    elif source_clip_url and "docs.google.com/document" in source_clip_url:
+        blob = blob + "\n" + fetch_google_doc_text(source_clip_url)
+
+    candidates = find_candidate_source_clips(blob)
+    if source_clip_url and classify_footage_url(source_clip_url) != "unknown":
+        if source_clip_url not in candidates:
+            candidates.insert(0, source_clip_url)
+
+    print(f"[resolver] {len(candidates)} candidate URL(s)")
+    for url in candidates:
+        print(f"[resolver]   {classify_footage_url(url)}  {url}")
+
+    if not candidates:
+        raise GoogleDocReadError(
+            "No footage URL in the brief (Drive / YouTube / MediaSilo / mp4). "
+            "Skipping this campaign."
+        )
+
+    last_err = "no adapter succeeded"
+    for url in candidates:
+        kind = classify_footage_url(url)
+        print(f"[resolver] trying {kind}: {url}")
+        try:
+            if kind == "unknown":
+                print(f"[resolver] skip unknown host: {url}")
+                continue
+            if kind == "drive_folder":
+                if pick_drive_folder_fn is None:
+                    files = find_videos_in_drive_folder(url)
+                    if not files:
+                        raise GoogleDocReadError(f"Drive folder has no videos: {url}")
+                    url = files[0]
+                    kind = "drive_file"
+                else:
+                    pick_drive_folder_fn(url, dest_path)
+                    return url
+            if kind == "drive_file" and download_drive_fn is not None:
+                fid = extract_drive_file_id(url)
+                if not fid:
+                    raise GoogleDocReadError(f"Bad Drive file URL: {url}")
+                download_drive_fn(fid, dest_path)
+                return url
+            if kind == "mediasilo":
+                download_mediasilo_review(url, dest_path)
+                return url
+            if download_url_fn is not None:
+                download_url_fn(url, dest_path)
+                return url
+            os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+            resp = requests.get(url, stream=True, timeout=120)
+            resp.raise_for_status()
+            with open(dest_path, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1 << 20):
+                    fh.write(chunk)
+            return url
+        except Exception as exc:
+            last_err = f"{kind} {url}: {exc}"
+            print(f"[resolver] {last_err}")
+            continue
+
+    raise GoogleDocReadError(
+        f"Footage resolver could not download any candidate. Last error: {last_err}"
+    )
+
 
 
 if __name__ == "__main__":

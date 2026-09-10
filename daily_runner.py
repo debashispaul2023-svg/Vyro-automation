@@ -39,13 +39,7 @@ import requests
 from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
 from checker import ValidationError, validate_or_raise
 from clip_picker import ClipPickError, collect_clips_from_doc_text, download_drive_file, pick_best_clip
-from google_doc_reader import (
-    GoogleDocReadError,
-    extract_drive_file_id,
-    fetch_google_doc_text,
-    find_candidate_source_clips,
-    is_drive_folder_url,
-)
+from google_doc_reader import GoogleDocReadError, resolve_and_download_footage
 from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
@@ -117,76 +111,43 @@ def _youtube_token_ready(token_path: str = "token.json") -> bool:
     return bool(data.get("refresh_token") and (data.get("token") or data.get("access_token")))
 
 
-def _resolve_source_clip(campaign: Campaign) -> str:
-    """Download the best source clip (Parts 3+4) into SOURCE_CLIP_PATH.
+def _pick_drive_folder(folder_url: str, dest_path: str) -> None:
+    drive_key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+    clips = collect_clips_from_doc_text(folder_url)
+    if clips and drive_key:
+        winner = pick_best_clip(
+            clips,
+            work_dir="work/daily",
+            api_key=drive_key,
+            campaign_notes="",
+        )
+        shutil.copyfile(winner.local_path, dest_path)
+        return
+    raise ClipPickError(f"No downloadable videos in Drive folder {folder_url}")
 
-    Vyro usually has campaign.source_clip_url. Whop usually has a Google Doc
-    that points at a Drive folder — list videos, score them, download winner.
-    """
+
+def _resolve_source_clip(campaign: Campaign) -> str:
+    """Agent resolver: brief → host → adapter → SOURCE_CLIP_PATH."""
     os.makedirs(os.path.dirname(SOURCE_CLIP_PATH) or ".", exist_ok=True)
     drive_key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
 
-    if campaign.source_clip_url and not is_drive_folder_url(campaign.source_clip_url):
-        fid = extract_drive_file_id(campaign.source_clip_url)
-        if fid and drive_key:
-            download_drive_file(fid, SOURCE_CLIP_PATH, drive_key)
-            return campaign.source_clip_url
-        _download_source_clip(campaign.source_clip_url, SOURCE_CLIP_PATH)
-        return campaign.source_clip_url
+    def _drive_file(fid: str, dest: str) -> None:
+        if not drive_key:
+            raise GoogleDocReadError("GOOGLE_DRIVE_API_KEY missing")
+        download_drive_file(fid, dest, drive_key)
 
-    reference_doc_url = getattr(campaign, "reference_doc_url", None)
-    folder_or_doc = reference_doc_url or campaign.source_clip_url
-    if not folder_or_doc:
-        raise RuntimeError(
-            "No source clip URL and no reference document to resolve one "
-            "from. This campaign may require footage you have to record/"
-            "provide yourself, which this pipeline doesn't handle yet."
+    try:
+        return resolve_and_download_footage(
+            dest_path=SOURCE_CLIP_PATH,
+            source_clip_url=campaign.source_clip_url or "",
+            reference_doc_url=getattr(campaign, "reference_doc_url", None) or "",
+            brief_text=campaign.requirements_text or campaign.name or "",
+            download_url_fn=_download_source_clip,
+            download_drive_fn=_drive_file,
+            pick_drive_folder_fn=_pick_drive_folder,
         )
-
-    doc_text = ""
-    if "docs.google.com/document" in folder_or_doc:
-        try:
-            doc_text = fetch_google_doc_text(folder_or_doc)
-        except GoogleDocReadError as exc:
-            raise RuntimeError(f"Could not read the campaign's reference document: {exc}") from exc
-    else:
-        doc_text = folder_or_doc
-
-    clips = collect_clips_from_doc_text(doc_text)
-    if clips and drive_key:
-        try:
-            winner = pick_best_clip(
-                clips,
-                work_dir="work/daily",
-                api_key=drive_key,
-                campaign_notes=(campaign.requirements_text or campaign.name or "")[:2000],
-            )
-            shutil.copyfile(winner.local_path, SOURCE_CLIP_PATH)
-            return winner.clip.url
-        except ClipPickError as exc:
-            print(f"Best-clip picker failed ({exc}); falling back to first downloadable URL.", file=sys.stderr)
-
-    candidates = find_candidate_source_clips(doc_text) if doc_text else [folder_or_doc]
-    if not candidates:
-        raise RuntimeError(
-            "The campaign's reference document didn't contain any "
-            "recognizable footage link (Drive/YouTube/Dropbox/etc)."
-        )
-    for candidate_url in candidates:
-        if is_drive_folder_url(candidate_url):
-            continue
-        try:
-            fid = extract_drive_file_id(candidate_url)
-            if fid and drive_key:
-                download_drive_file(fid, SOURCE_CLIP_PATH, drive_key)
-                return candidate_url
-            _download_source_clip(candidate_url, SOURCE_CLIP_PATH)
-            return candidate_url
-        except Exception as exc:  # noqa: BLE001
-            print(f"Download failed for {candidate_url}: {exc}", file=sys.stderr)
-            continue
-
-    raise RuntimeError("None of the candidate footage links in the reference document could be downloaded.")
+    except GoogleDocReadError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 _SKIP_CAMPAIGN_MARKERS = (
@@ -251,6 +212,7 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
             print(f"Auto-joined {len(newly_joined)} new Whop campaign(s): {newly_joined}")
     except Exception as exc:
         print(f"Whop auto-discovery/join failed: {exc}", file=sys.stderr)
+
     try:
         whop_campaign = whop_check_configured_campaigns()
     except WhopClientError as exc:
@@ -312,6 +274,7 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
         return generate_metadata(hook=hook, summary=summary, req=req)
 
 
+
 def _relax_min_seconds_to_source(req: CampaignRequirements, source_path: str) -> None:
     """Stop render from dying when AI parsed min=15 but the clip is 14.5s."""
     try:
@@ -348,6 +311,7 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
         return 1
 
     hook = campaign.name or "New campaign clip"
+    youtube_url = None
 
     try:
         _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
@@ -369,54 +333,61 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
             req=req,
         )
 
-        if not _youtube_token_ready():
-            print(
-                "[4/5] YouTube token.json is missing or is still client_secrets. "
-                "Stopping after render (Parts 1-4 done). "
-                "Finish YouTube Phone Login, then re-run."
-            )
-            return 2
-        result = upload_video(
-            video_path=OUTPUT_PATH,
-            title=meta.title,
-            description=meta.description,
-            tags=meta.tags,
-            privacy_status="unlisted",
-            token_path="token.json",
-        )
-        print(f"[4/5] Uploaded to YouTube: {result.video_url}")
+        youtube_url = None
+        if _youtube_token_ready():
+            try:
+                yt = upload_video(
+                    video_path=OUTPUT_PATH,
+                    title=meta.title,
+                    description=meta.description,
+                    tags=meta.tags,
+                    privacy_status="unlisted",
+                    token_path="token.json",
+                )
+                youtube_url = yt.video_url
+                print(f"[4/5] Uploaded to YouTube (backup, unlisted): {youtube_url}")
+            except UploadError as exc:
+                print(f"[4/5] YouTube upload failed (IG is primary, continuing): {exc}", file=sys.stderr)
+        else:
+            print("[4/5] No usable YouTube token — skipping YT. Instagram is the main target.")
     except RenderError as exc:
         print(f"Rendering failed: {exc}", file=sys.stderr)
         return 1
     except ValidationError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    except UploadError as exc:
-        print(f"YouTube upload failed: {exc}", file=sys.stderr)
-        return 1
 
+    instagram_media_id = None
     try:
         instagram_media_id = upload_reel(
             video_path=OUTPUT_PATH,
             caption=f"{meta.title}\n\n{meta.description}",
             release_tag=f"clip-{platform}-{campaign.campaign_id}",
         )
-        print(f"[5/5] Uploaded to Instagram Reels: {instagram_media_id}")
+        print(f"[5/5] Uploaded to Instagram Reels (MAIN): {instagram_media_id}")
     except InstagramUploadError as exc:
-        print(f"Instagram upload failed (continuing anyway): {exc}", file=sys.stderr)
-
-    try:
-        _submit_back(platform, campaign, result.video_url)
-        print(f"Submitted {result.video_url} to {platform} campaign '{campaign.campaign_id}'.")
-    except (VyroClientError, WhopClientError) as exc:
+        print(f"Instagram upload failed: {exc}", file=sys.stderr)
         print(
-            f"Upload succeeded but {platform} submission failed: {exc}\n"
-            f"SUBMIT THIS URL MANUALLY: {result.video_url}",
+            "IG needs IG_ACCESS_TOKEN + IG_BUSINESS_ACCOUNT_ID + "
+            "ASSET_HOST_REPO + ASSET_HOST_TOKEN (public GitHub release host).",
             file=sys.stderr,
         )
-        return 1
 
-    return 0
+    if youtube_url:
+        try:
+            _submit_back(platform, campaign, youtube_url)
+            print(f"Submitted {youtube_url} to {platform} campaign '{campaign.campaign_id}'.")
+        except (VyroClientError, WhopClientError) as exc:
+            print(
+                f"Upload succeeded but {platform} submission failed: {exc}\n"
+                f"SUBMIT THIS URL MANUALLY: {youtube_url}",
+                file=sys.stderr,
+            )
+
+    if instagram_media_id or youtube_url:
+        return 0
+    print("Rendered OK but neither Instagram nor YouTube published. Not marking processed.")
+    return 2
 
 
 def main() -> int:
@@ -440,7 +411,7 @@ def main() -> int:
         _save_processed(processed)
         return 0
     if status == 2:
-        print("Parts 1-4 done. Campaign NOT marked processed until YouTube token works.")
+        print("Rendered but no IG/YouTube publish. Campaign NOT marked processed.")
         return 0
     return status
 

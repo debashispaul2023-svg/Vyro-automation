@@ -141,7 +141,7 @@ def _ensure_logged_in(page: Page, target_url: str) -> None:
             "cookie refresh."
         )
 
-    if "/login" in page.url or re.search(r"whop\\.com/start(\\?|$)", page.url):
+    if "/login" in page.url or re.search(r"whop\.com/start(\?|$)", page.url):
         raise WhopSessionExpired(
             "Whop session expired (redirected to login/start). Re-capture "
             "your cookies (see module docstring) and update the "
@@ -295,7 +295,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     if "not available in your region" in body_text.lower():
         return None
 
-    budget_match = re.search(r"\\$([\\d.]+)K?\\s*/\\s*\\$([\\d.]+)K", body_text)
+    budget_match = re.search(r"\$([\d.]+)K?\s*/\s*\$([\d.]+)K", body_text)
     if budget_match:
         used = float(budget_match.group(1))
         total = float(budget_match.group(2))
@@ -323,7 +323,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     if not reference_doc_url:
         try:
             reference_card = frame.get_by_text(
-                re.compile(r"edit\\?usp=sharing|reference materials|resources|dos and don", re.I)
+                re.compile(r"edit\?usp=sharing|reference materials|resources|dos and don", re.I)
             ).first
             try:
                 with page.context.expect_page(timeout=4000) as new_page_info:
@@ -356,7 +356,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         for marker in ("reference", "dos", "google doc"):
             idx = lower_body.find(marker)
             if idx != -1:
-                snippet = body_text[max(0, idx - 80):idx + 200].replace("\\n", " | ")
+                snippet = body_text[max(0, idx - 80):idx + 200].replace("\n", " | ")
                 print(f"[whop_client debug] Context around '{marker}': ...{snippet}...")
 
     platforms = []
@@ -402,7 +402,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 print("[whop_client debug] Discover page timed out — skipping auto-join.")
                 return newly_joined
 
-            card_texts = page.get_by_text(re.compile(r"\\$[\\d.]+\\s*/\\s*1k", re.I))
+            card_texts = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
             card_count = min(card_texts.count(), 20)
             print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover page.")
 
@@ -512,29 +512,65 @@ def _select_platform_icon(frame, video_url: str) -> None:
         pass
 
 
-def submit_video_link(campaign: WhopCampaign, video_url: str) -> None:
+def _open_campaign_app_frame(page: Page, campaign_url: str):
+    """Land inside the joined campaign iframe, not Discover / outer shell."""
+    frame = _get_content_frame(page)
+    uuid_match = re.search(
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        campaign_url,
+        re.I,
+    )
+    if not uuid_match:
+        return frame
+    cid = uuid_match.group(1)
+    app_frame = None
+    for f in page.frames:
+        if "apps.whop.com" in (f.url or ""):
+            app_frame = f
+            break
+    if app_frame is None:
+        return frame
+    origin = (app_frame.url or "").split("/discover")[0].split("/campaigns")[0]
+    target = f"{origin}/campaigns/{cid}"
+    print(f"[whop_client debug] Opening campaign inside app iframe: {target}")
+    try:
+        app_frame.goto(target, timeout=20000)
+        page.wait_for_timeout(2500)
+        frame = _get_content_frame(page)
+    except Exception as exc:
+        print(f"[whop_client debug] Iframe goto failed: {exc}")
+    return frame
+
+
+def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = False) -> None:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
             _ensure_logged_in(page, campaign.submit_page_url)
-            frame = _get_content_frame(page)
+            frame = _open_campaign_app_frame(page, campaign.submit_page_url)
             frame.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
             page.wait_for_timeout(1000)
             _select_platform_icon(frame, video_url)
-            url_input = frame.get_by_placeholder(re.compile(r"tiktok\\.com|youtube\\.com|instagram\\.com|video", re.I))
+            url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
             url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
             try:
                 frame.get_by_role("checkbox").first.check(timeout=3000)
             except Exception:
                 frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+            if dry_run:
+                print("[whop] DRY RUN — form filled, final Submit not clicked.")
+                print(f"[whop] would submit: {video_url}")
+                return
             frame.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
             _settle(page)
+            print(f"[whop] submitted: {video_url}")
         except PlaywrightTimeoutError as exc:
             raise WhopClientError(f"Submission failed — a step timed out. Details: {exc}") from exc
         finally:
             browser.close()
+
 
 
 if __name__ == "__main__":
