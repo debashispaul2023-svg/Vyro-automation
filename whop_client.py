@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -512,34 +513,58 @@ def _select_platform_icon(frame, video_url: str) -> None:
         pass
 
 
+def _wait_for_app_frame(page: Page, timeout_ms: int = 25000):
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for f in page.frames:
+            if "apps.whop.com" in (f.url or ""):
+                return f
+        page.wait_for_timeout(400)
+    return None
+
+
 def _open_campaign_app_frame(page: Page, campaign_url: str):
     """Land inside the joined campaign iframe, not Discover / outer shell."""
-    frame = _get_content_frame(page)
     uuid_match = re.search(
         r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
         campaign_url,
         re.I,
     )
-    if not uuid_match:
-        return frame
-    cid = uuid_match.group(1)
-    app_frame = None
-    for f in page.frames:
-        if "apps.whop.com" in (f.url or ""):
-            app_frame = f
-            break
+    app_frame = _wait_for_app_frame(page)
     if app_frame is None:
-        return frame
+        print("[whop_client debug] apps.whop.com iframe never appeared.")
+        return _get_content_frame(page)
+    if not uuid_match:
+        return _get_content_frame(page)
+    cid = uuid_match.group(1)
     origin = (app_frame.url or "").split("/discover")[0].split("/campaigns")[0]
     target = f"{origin}/campaigns/{cid}"
     print(f"[whop_client debug] Opening campaign inside app iframe: {target}")
     try:
         app_frame.goto(target, timeout=20000)
         page.wait_for_timeout(2500)
-        frame = _get_content_frame(page)
     except Exception as exc:
         print(f"[whop_client debug] Iframe goto failed: {exc}")
-    return frame
+    return _get_content_frame(page)
+
+
+def _click_submit_clip(frame, *, last: bool = False) -> None:
+    locators = [
+        frame.get_by_role("button", name=re.compile("submit clip", re.I)),
+        frame.get_by_text(re.compile(r"^submit clip$", re.I)),
+        frame.locator("button", has_text=re.compile("submit clip", re.I)),
+        frame.locator("a", has_text=re.compile("submit clip", re.I)),
+    ]
+    last_err = None
+    for loc in locators:
+        try:
+            target = loc.last if last else loc.first
+            target.click(timeout=8000)
+            return
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise PlaywrightTimeoutError(str(last_err) if last_err else "Submit clip not found")
 
 
 def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = False) -> None:
@@ -549,21 +574,29 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
         page = context.new_page()
         try:
             _ensure_logged_in(page, campaign.submit_page_url)
+            page.wait_for_timeout(2000)
             frame = _open_campaign_app_frame(page, campaign.submit_page_url)
-            frame.get_by_role("button", name=re.compile("submit clip", re.I)).first.click(timeout=DEFAULT_TIMEOUT_MS)
-            page.wait_for_timeout(1000)
+            print(f"[whop] submit frame url={getattr(frame, 'url', '')}")
+            _click_submit_clip(frame, last=False)
+            page.wait_for_timeout(1200)
             _select_platform_icon(frame, video_url)
             url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
-            url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
+            try:
+                url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
+            except Exception:
+                frame.locator("input").first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
             try:
                 frame.get_by_role("checkbox").first.check(timeout=3000)
             except Exception:
-                frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+                try:
+                    frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+                except Exception:
+                    print("[whop] no requirements checkbox found — continuing")
             if dry_run:
                 print("[whop] DRY RUN — form filled, final Submit not clicked.")
                 print(f"[whop] would submit: {video_url}")
                 return
-            frame.get_by_role("button", name=re.compile("submit clip", re.I)).last.click(timeout=DEFAULT_TIMEOUT_MS)
+            _click_submit_clip(frame, last=True)
             _settle(page)
             print(f"[whop] submitted: {video_url}")
         except PlaywrightTimeoutError as exc:
