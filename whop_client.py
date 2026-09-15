@@ -388,6 +388,28 @@ def _save_new_campaign_urls(new_urls: list[str]) -> None:
         json.dump({"joined_campaigns": configured}, f, indent=2)
 
 
+def _normalize_campaign_url(url: str) -> str:
+    """apps.whop.com campaign URL -> stable experiences URL we store."""
+    exp = re.search(r"(exp_[A-Za-z0-9]+)", url or "")
+    cid = re.search(
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        url or "",
+        re.I,
+    )
+    if exp and cid:
+        return f"https://whop.com/experiences/{exp.group(1)}/campaigns/{cid.group(1)}"
+    return url or ""
+
+
+def _discover_root(page: Page):
+    """Discover content lives in the apps.whop.com iframe, not the shell."""
+    frame = _wait_for_app_frame(page, timeout_ms=20000)
+    if frame is None:
+        frame = _get_content_frame(page)
+    print(f"[whop_client debug] Discover root url={getattr(frame, 'url', '')}")
+    return frame
+
+
 def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
     known_urls = {entry["url"] for entry in _load_configured_campaigns()}
     newly_joined: list[str] = []
@@ -397,15 +419,49 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
-            try:
-                _ensure_logged_in(page, WHOP_DISCOVER_URL)
-            except PlaywrightTimeoutError:
+            landed = False
+            for start_url in WHOP_DISCOVER_URLS:
+                try:
+                    print(f"[whop_client debug] Opening Discover {start_url}")
+                    _ensure_logged_in(page, start_url)
+                    landed = True
+                    break
+                except PlaywrightTimeoutError:
+                    print(f"[whop_client debug] {start_url} timed out")
+                except WhopClientError as exc:
+                    print(f"[whop_client debug] {start_url} failed: {exc}")
+            if not landed:
                 print("[whop_client debug] Discover page timed out — skipping auto-join.")
                 return newly_joined
 
-            card_texts = page.get_by_text(re.compile(r"\$[\d.]+\s*/\s*1k", re.I))
-            card_count = min(card_texts.count(), 20)
-            print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover page.")
+            frame = _discover_root(page)
+            rate = re.compile(r"\$[\d.]+\s*/\s*1k", re.I)
+            card_texts = frame.get_by_text(rate)
+            try:
+                card_count = min(card_texts.count(), 20)
+            except Exception:
+                card_count = 0
+            print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover (iframe).")
+
+            if card_count == 0:
+                # Fall back to in-app Discover of an already-joined experience.
+                configured = _load_configured_campaigns()
+                if configured:
+                    try:
+                        _ensure_logged_in(page, configured[0]["url"])
+                        app = _wait_for_app_frame(page, timeout_ms=20000)
+                        if app is not None:
+                            origin = (app.url or "").split("/discover")[0].split("/campaigns")[0]
+                            target = f"{origin}/discover"
+                            print(f"[whop_client debug] Trying in-app Discover {target}")
+                            app.goto(target, timeout=20000)
+                            page.wait_for_timeout(2000)
+                            frame = _discover_root(page)
+                            card_texts = frame.get_by_text(rate)
+                            card_count = min(card_texts.count(), 20)
+                            print(f"[whop_client debug] In-app Discover cards: {card_count}")
+                    except Exception as exc:
+                        print(f"[whop_client debug] In-app Discover fallback failed: {exc}")
 
             joined_this_run = 0
             for i in range(card_count):
@@ -419,7 +475,11 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     continue
 
                 page.wait_for_timeout(1500)
-                modal_text = page.inner_text("body")
+                frame = _discover_root(page)
+                try:
+                    modal_text = frame.inner_text("body")
+                except Exception:
+                    modal_text = page.inner_text("body")
                 if "not available in your region" in modal_text.lower():
                     print(f"[whop_client debug] Card #{i} is region-locked, skipping.")
                     _close_any_modal(page)
@@ -435,29 +495,48 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     except Exception as exc:
                         print(f"[whop_client debug] AI scoring unavailable for card #{i} ({exc}); proceeding anyway.")
 
-                try:
-                    join_button = page.get_by_role("button", name=re.compile("join campaign", re.I)).first
-                    join_button.click(timeout=5000)
-                    page.wait_for_timeout(2000)
-                except Exception as exc:
-                    print(f"[whop_client debug] No 'Join Campaign' button on card #{i} (maybe already joined): {exc}")
+                joined = False
+                for root in (frame, page):
+                    try:
+                        root.get_by_role("button", name=re.compile("join campaign", re.I)).first.click(timeout=4000)
+                        page.wait_for_timeout(2000)
+                        joined = True
+                        break
+                    except Exception:
+                        continue
+                if not joined:
+                    print(f"[whop_client debug] No 'Join Campaign' button on card #{i} (maybe already joined).")
                     _close_any_modal(page)
                     continue
 
                 page.wait_for_timeout(1500)
-                if "/app/campaigns/" in page.url and page.url not in known_urls:
-                    known_urls.add(page.url)
-                    newly_joined.append(page.url)
+                frame = _discover_root(page)
+                candidates = [page.url, getattr(frame, "url", "")]
+                saved = None
+                for raw in candidates:
+                    norm = _normalize_campaign_url(raw)
+                    if "/campaigns/" in (norm or "") and norm not in known_urls:
+                        saved = norm
+                        break
+                if saved:
+                    known_urls.add(saved)
+                    newly_joined.append(saved)
                     joined_this_run += 1
-                    print(f"[whop_client debug] Joined new campaign: {page.url}")
+                    print(f"[whop_client debug] Joined new campaign: {saved}")
                 else:
                     print(
                         f"[whop_client debug] Joined card #{i} but landed on unexpected URL "
-                        f"({page.url}) — couldn't confirm the campaign dashboard link."
+                        f"(page={page.url} frame={getattr(frame, 'url', '')})."
                     )
 
-                page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
-                _settle(page)
+                try:
+                    page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
+                    _settle(page)
+                    frame = _discover_root(page)
+                    card_texts = frame.get_by_text(rate)
+                except Exception as exc:
+                    print(f"[whop_client debug] Could not return to Discover: {exc}")
+                    break
         finally:
             browser.close()
 
@@ -567,7 +646,26 @@ def _click_submit_clip(frame, *, last: bool = False) -> None:
     raise PlaywrightTimeoutError(str(last_err) if last_err else "Submit clip not found")
 
 
+def _clean_public_video_url(video_url: str) -> str:
+    """Drop tracking query like ?stkn= so Whop sees a normal permalink."""
+    raw = (video_url or "").strip()
+    if "?" in raw:
+        raw = raw.split("?", 1)[0]
+    return raw.rstrip("/") + ("/" if "instagram.com/reel/" in raw.lower() else "")
+
+
+def _submission_looks_accepted(text: str) -> bool:
+    lower = (text or "").lower()
+    good = ("submitted", "pending review", "under review", "clip submitted", "successfully")
+    bad = ("invalid url", "couldn't submit", "could not submit", "already submitted", "error")
+    if any(b in lower for b in bad):
+        return False
+    return any(g in lower for g in good)
+
+
 def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = False) -> None:
+    video_url = _clean_public_video_url(video_url)
+    print(f"[whop] using cleaned url: {video_url}")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = _new_context_with_session(browser)
@@ -597,7 +695,18 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
                 print(f"[whop] would submit: {video_url}")
                 return
             _click_submit_clip(frame, last=True)
+            page.wait_for_timeout(2500)
             _settle(page)
+            try:
+                body = frame.inner_text("body")
+            except Exception:
+                body = page.inner_text("body")
+            print(f"[whop] post-submit text snippet: {body[:400]!r}")
+            if not _submission_looks_accepted(body):
+                raise WhopClientError(
+                    "Clicked Submit but page did not show a success/pending message. "
+                    "Treat as NOT submitted. Check My work / Drafts on the phone."
+                )
             print(f"[whop] submitted: {video_url}")
         except PlaywrightTimeoutError as exc:
             raise WhopClientError(f"Submission failed — a step timed out. Details: {exc}") from exc
