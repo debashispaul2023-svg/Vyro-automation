@@ -184,7 +184,10 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
 def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetadata) -> str:
     """Rules first. Missing required lines get appended so IG does not ship a naked caption."""
     raw = f"{campaign.name or ''}\n{campaign.requirements_text or ''}\n{meta.title}\n{meta.description}"
-    lines = [meta.title.strip(), meta.description.strip()]
+    desc = (meta.description or "").strip()
+    if "skip to content" in desc.lower() or "link your discord" in desc.lower():
+        desc = ""
+    lines = [meta.title.strip(), desc]
     low = "\n".join(lines).lower()
     raw_l = raw.lower()
     if "zodiac" in raw_l and "zodiac" not in low:
@@ -303,6 +306,28 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
         return "whop", whop_campaign
 
     return None, None
+
+
+def _instagram_permalink(media_id: str) -> str:
+    """Turn Graph media id into a public Reel URL for Whop submit."""
+    token = (os.environ.get("IG_ACCESS_TOKEN") or "").strip()
+    if not media_id or not token:
+        return ""
+    try:
+        resp = requests.get(
+            f"https://graph.facebook.com/v21.0/{media_id}",
+            params={"fields": "permalink", "access_token": token},
+            timeout=30,
+        )
+        data = resp.json() if resp.content else {}
+        link = (data.get("permalink") or "").strip()
+        if link.startswith("http"):
+            print(f"[ig] permalink {link}")
+            return link
+        print(f"[ig] no permalink in Graph response: {data}")
+    except Exception as exc:
+        print(f"[ig] permalink lookup failed: {exc}")
+    return ""
 
 
 def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
@@ -473,16 +498,27 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             file=sys.stderr,
         )
 
-    if youtube_url:
+    ig_url = _instagram_permalink(str(instagram_media_id or ""))
+    submit_url = ig_url or (youtube_url or "").strip()
+    if submit_url and "youtube.com/watch" in submit_url and "v=" not in submit_url:
+        print(f"[submit] refusing broken YouTube URL: {submit_url}")
+        submit_url = ""
+    if ig_url:
+        print(f"[6/5] Auto-submitting Instagram FIRST: {ig_url}")
+    elif submit_url:
+        print(f"[6/5] No IG permalink — falling back to YouTube: {submit_url}")
+    if submit_url:
         try:
-            _submit_back(platform, campaign, youtube_url)
-            print(f"Submitted {youtube_url} to {platform} campaign '{campaign.campaign_id}'.")
+            _submit_back(platform, campaign, submit_url)
+            print(f"Submitted {submit_url} to {platform} campaign '{campaign.campaign_id}'.")
         except (VyroClientError, WhopClientError) as exc:
             print(
                 f"Upload succeeded but {platform} submission failed: {exc}\n"
-                f"SUBMIT THIS URL MANUALLY: {youtube_url}",
+                f"SUBMIT THIS URL MANUALLY: {submit_url}",
                 file=sys.stderr,
             )
+    else:
+        print("[6/5] Nothing public to auto-submit.")
 
     if instagram_media_id or youtube_url:
         return 0
