@@ -39,7 +39,12 @@ import requests
 from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
 from checker import ValidationError, validate_or_raise
 from clip_picker import ClipPickError, collect_clips_from_doc_text, download_drive_file, pick_best_clip
-from google_doc_reader import GoogleDocReadError, resolve_and_download_footage
+from google_doc_reader import (
+    GoogleDocReadError,
+    extract_drive_file_id,
+    list_content_folder_clips,
+    resolve_and_download_footage,
+)
 from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
@@ -54,6 +59,7 @@ from whop_client import submit_video_link as whop_submit_video_link
 from youtube_uploader import UploadError, upload_video
 
 PROCESSED_LOG_PATH = "processed_campaigns.json"
+CLIP_LOG_PATH = "processed_clips.json"
 SOURCE_CLIP_PATH = "input_16x9.mp4"
 OUTPUT_PATH = "output/short.mp4"
 
@@ -70,6 +76,32 @@ def _load_processed() -> set[str]:
 def _save_processed(processed: set[str]) -> None:
     with open(PROCESSED_LOG_PATH, "w", encoding="utf-8") as f:
         json.dump(sorted(processed), f, indent=2)
+
+
+def _load_clip_log() -> dict:
+    empty = {"closed_campaigns": [], "clips": []}
+    if not os.path.isfile(CLIP_LOG_PATH):
+        return empty
+    with open(CLIP_LOG_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        return empty
+    data.setdefault("closed_campaigns", [])
+    data.setdefault("clips", [])
+    return data
+
+
+def _save_clip_log(log: dict) -> None:
+    with open(CLIP_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(log, f, indent=2)
+
+
+def _clip_already_used(log: dict, campaign_id: str, clip_id: str) -> bool:
+    """Same file is allowed again only under a different (new) campaign_id."""
+    for row in log.get("clips") or []:
+        if row.get("campaign_id") == campaign_id and row.get("clip_id") == clip_id:
+            return True
+    return False
 
 
 def _download_source_clip(url: str, dest_path: str) -> None:
@@ -124,6 +156,54 @@ def _pick_drive_folder(folder_url: str, dest_path: str) -> None:
         shutil.copyfile(winner.local_path, dest_path)
         return
     raise ClipPickError(f"No downloadable videos in Drive folder {folder_url}")
+
+
+def _list_campaign_clips(campaign: Campaign) -> list[dict[str, str]]:
+    return list_content_folder_clips(
+        source_clip_url=getattr(campaign, "source_clip_url", "") or "",
+        reference_doc_url=getattr(campaign, "reference_doc_url", None) or "",
+        brief_text=campaign.requirements_text or campaign.name or "",
+    )
+
+
+def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
+    if campaign.campaign_id in set(log.get("closed_campaigns") or []):
+        print(f"Campaign {campaign.campaign_id} is closed — never reuse its folder.")
+        return None
+    clips = _list_campaign_clips(campaign)
+    if not clips:
+        return None
+    for clip in clips:
+        if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"]):
+            print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
+            return clip
+    print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
+    return None
+
+
+def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetadata) -> str:
+    """Rules first. Missing required lines get appended so IG does not ship a naked caption."""
+    raw = f"{campaign.name or ''}\n{campaign.requirements_text or ''}\n{meta.title}\n{meta.description}"
+    lines = [meta.title.strip(), meta.description.strip()]
+    low = "\n".join(lines).lower()
+    raw_l = raw.lower()
+    if "zodiac" in raw_l and "zodiac" not in low:
+        lines.append("Zodiac Beta Weekend 2 — play free this weekend.")
+    if "call of duty" in raw_l or "callofduty" in raw_l:
+        if "@callofduty" not in low:
+            lines.append("@Callofduty")
+    if "#ad" not in low:
+        lines.append("#Ad")
+    for tag in req.mandatory_hashtags or []:
+        token = tag if str(tag).startswith("#") else f"#{tag}"
+        if token.lower() not in low:
+            lines.append(token)
+    for link in req.required_links or []:
+        if link and link not in "\n".join(lines):
+            lines.append(link)
+    caption = "\n".join(x for x in lines if x).strip()
+    print(f"[caption] {caption[:240]!r}")
+    return caption
 
 
 def _resolve_source_clip(campaign: Campaign) -> str:
@@ -300,11 +380,31 @@ def _relax_min_seconds_to_source(req: CampaignRequirements, source_path: str) ->
         req.min_seconds = new_min
 
 
-def process_campaign(platform: str, campaign: Campaign) -> int:
+def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | None = None) -> int:
     req = _parse_requirements(campaign)
 
     try:
-        resolved_source = _resolve_source_clip(campaign)
+        if preferred_clip and preferred_clip.get("kind") == "drive_file":
+            fid = preferred_clip.get("clip_id") or extract_drive_file_id(preferred_clip.get("url") or "")
+            drive_key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+            if not fid or not drive_key:
+                raise GoogleDocReadError("Drive clip selected but file id / API key missing")
+            download_drive_file(fid, SOURCE_CLIP_PATH, drive_key)
+            resolved_source = preferred_clip.get("url") or fid
+        elif preferred_clip and preferred_clip.get("url"):
+            resolved_source = resolve_and_download_footage(
+                dest_path=SOURCE_CLIP_PATH,
+                source_clip_url=preferred_clip["url"],
+                reference_doc_url="",
+                brief_text="",
+                download_url_fn=_download_source_clip,
+                download_drive_fn=lambda i, d: download_drive_file(
+                    i, d, (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+                ),
+                pick_drive_folder_fn=_pick_drive_folder,
+            )
+        else:
+            resolved_source = _resolve_source_clip(campaign)
         print(f"[1/5] Resolved + downloaded source clip from {resolved_source} -> {SOURCE_CLIP_PATH}")
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to resolve/download source clip: {exc}", file=sys.stderr)
@@ -361,8 +461,8 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
     try:
         instagram_media_id = upload_reel(
             video_path=OUTPUT_PATH,
-            caption=f"{meta.title}\n\n{meta.description}",
-            release_tag=f"clip-{platform}-{campaign.campaign_id}",
+            caption=_ig_caption(campaign, req, meta),
+            release_tag=f"clip-{platform}-{campaign.campaign_id}-{int(__import__('time').time())}",
         )
         print(f"[5/5] Uploaded to Instagram Reels (MAIN): {instagram_media_id}")
     except InstagramUploadError as exc:
@@ -391,7 +491,7 @@ def process_campaign(platform: str, campaign: Campaign) -> int:
 
 
 def main() -> int:
-    processed = _load_processed()
+    clip_log = _load_clip_log()
 
     platform, campaign = _find_campaign()
 
@@ -399,19 +499,32 @@ def main() -> int:
         print("No usable active campaign today on Vyro or Whop. Exiting.")
         return 0
 
-    if campaign.campaign_id in processed:
-        print(f"Campaign '{campaign.campaign_id}' ({platform}) already processed. Skipping.")
+    if campaign.campaign_id in set(clip_log.get("closed_campaigns") or []):
+        print(f"Campaign '{campaign.campaign_id}' is closed. Ignoring its folder forever.")
         return 0
 
-    print(f"Found new campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
+    print(f"Found active campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
 
-    status = process_campaign(platform, campaign)
+    nxt = _next_unused_clip(campaign, clip_log)
+    if nxt is None:
+        print("No unused Content Folder clip left on this campaign (or folder unreadable).")
+        return 0
+
+    status = process_campaign(platform, campaign, preferred_clip=nxt)
     if status == 0:
-        processed.add(campaign.campaign_id)
-        _save_processed(processed)
+        clip_log["clips"].append(
+            {
+                "campaign_id": campaign.campaign_id,
+                "clip_id": nxt["clip_id"],
+                "url": nxt.get("url", ""),
+                "kind": nxt.get("kind", ""),
+            }
+        )
+        _save_clip_log(clip_log)
+        print(f"Recorded clip {nxt['clip_id']} for campaign {campaign.campaign_id}.")
         return 0
     if status == 2:
-        print("Rendered but no IG/YouTube publish. Campaign NOT marked processed.")
+        print("Rendered but no IG/YouTube publish. Clip NOT marked used.")
         return 0
     return status
 

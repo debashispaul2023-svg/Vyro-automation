@@ -132,8 +132,23 @@ def _unwrap_google_redirect(url: str) -> str:
     return unquote(real) if real else url
 
 
+_CONTENT_FOLDER_LABELS = (
+    "content folder",
+    "official content",
+    "official footage",
+    "source footage",
+    "footage folder",
+    "asset folder",
+    "resources folder",
+)
+
+
 def _html_export_links(doc_id: str) -> list[str]:
-    """TXT export drops hyperlinks. HTML export keeps the real hrefs."""
+    """TXT export drops hyperlinks. HTML export keeps the real hrefs.
+
+    Anchors whose label looks like 'Content Folder' are marked so the
+    resolver tries them first (Drive folder, MediaSilo review, etc.).
+    """
     from html import unescape
 
     resp = requests.get(
@@ -143,10 +158,23 @@ def _html_export_links(doc_id: str) -> list[str]:
     if resp.status_code != 200:
         return []
     links: list[str] = []
-    for raw in re.findall(r'href="([^"]+)"', resp.text):
-        url = _unwrap_google_redirect(unescape(raw)).rstrip(".,;:)")
-        if url.startswith("http"):
-            links.append(url)
+    preferred: list[str] = []
+    for raw_href, raw_text in re.findall(
+        r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+        resp.text,
+        flags=re.I | re.S,
+    ):
+        url = _unwrap_google_redirect(unescape(raw_href)).rstrip(".,;:)")
+        if not url.startswith("http"):
+            continue
+        label = re.sub(r"<[^>]+>", " ", raw_text)
+        label = unescape(re.sub(r"\s+", " ", label)).strip().lower()
+        if any(tag in label for tag in _CONTENT_FOLDER_LABELS) or "mediasilo.com/review" in url.lower():
+            preferred.append(url)
+            links.append(f"CONTENT_FOLDER={url}")
+        links.append(url)
+    if preferred:
+        print(f"[doc] Content Folder link(s): {preferred}")
     return links
 
 
@@ -254,13 +282,21 @@ def download_mediasilo_review(review_url: str, dest_path: str) -> str:
 
 
 def find_candidate_source_clips(doc_text: str) -> list[str]:
+    """Raw URL candidates from doc text (Drive, MediaSilo, YouTube, etc).
 
-    """Raw URL candidates from doc text (Drive, MediaSilo, YouTube, etc)."""
+    CONTENT_FOLDER=... lines (from HTML export) go first.
+    """
+    preferred: list[str] = []
+    for raw in re.findall(r"CONTENT_FOLDER=(https?://\S+)", doc_text or ""):
+        preferred.append(raw.rstrip(".,;:)"))
+
     urls = extract_urls(doc_text)
-    candidates = []
+    candidates: list[str] = []
     seen: set[str] = set()
-    for url in urls:
+    for url in preferred + urls:
         cleaned = url.rstrip(".,;:)")
+        if cleaned.lower().startswith("content_folder="):
+            cleaned = cleaned.split("=", 1)[1]
         lower = cleaned.lower()
         if any(
             marker in lower
@@ -513,9 +549,28 @@ def resolve_and_download_footage(
         blob = blob + "\n" + fetch_google_doc_text(source_clip_url)
 
     candidates = find_candidate_source_clips(blob)
-    if source_clip_url and classify_footage_url(source_clip_url) != "unknown":
-        if source_clip_url not in candidates:
-            candidates.insert(0, source_clip_url)
+    configured = (os.environ.get("SOURCE_CLIP_URL") or "").strip() or source_clip_url
+    if configured and classify_footage_url(configured) != "unknown":
+        if configured in candidates:
+            candidates.remove(configured)
+        candidates.insert(0, configured)
+
+    priority = {
+        "drive_folder": 0,
+        "drive_file": 1,
+        "direct": 2,
+        "youtube": 3,
+        "vimeo": 3,
+        "file_host": 4,
+        "mediasilo": 8,
+        "frameio": 8,
+        "unknown": 9,
+    }
+    # Keep configured/env URL first, then Drive before MediaSilo.
+    head = candidates[:1] if configured and candidates and candidates[0] == configured else []
+    rest = candidates[len(head):]
+    rest.sort(key=lambda u: priority.get(classify_footage_url(u), 9))
+    candidates = head + rest
 
     print(f"[resolver] {len(candidates)} candidate URL(s)")
     for url in candidates:
@@ -573,6 +628,46 @@ def resolve_and_download_footage(
         f"Footage resolver could not download any candidate. Last error: {last_err}"
     )
 
+
+def list_content_folder_clips(
+    *,
+    source_clip_url: str = "",
+    reference_doc_url: str = "",
+    brief_text: str = "",
+) -> list[dict[str, str]]:
+    """Every clip inside the campaign Content Folder (Drive files or one MediaSilo review)."""
+    blob = "\n".join(x for x in (source_clip_url, reference_doc_url, brief_text) if x)
+    if reference_doc_url and "docs.google.com/document" in reference_doc_url:
+        try:
+            blob += "\n" + fetch_google_doc_text(reference_doc_url)
+        except GoogleDocReadError as exc:
+            print(f"[resolver] doc fetch failed ({exc}); using page text only")
+    candidates = find_candidate_source_clips(blob)
+    configured = (os.environ.get("SOURCE_CLIP_URL") or "").strip() or source_clip_url
+    if configured and classify_footage_url(configured) != "unknown":
+        if configured in candidates:
+            candidates.remove(configured)
+        candidates.insert(0, configured)
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for url in candidates:
+        kind = classify_footage_url(url)
+        if kind == "drive_folder":
+            for clip in collect_video_clips_in_drive_folder(url):
+                if clip.file_id not in seen:
+                    seen.add(clip.file_id)
+                    out.append({"clip_id": clip.file_id, "url": clip.url, "kind": "drive_file", "name": clip.name})
+            continue
+        if kind == "unknown":
+            continue
+        cid = extract_drive_file_id(url) or url.rstrip("/").split("/")[-1]
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append({"clip_id": cid, "url": url, "kind": kind, "name": cid})
+    print(f"[resolver] content-folder listed {len(out)} clip(s)")
+    return out
 
 
 if __name__ == "__main__":

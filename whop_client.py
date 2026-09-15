@@ -569,6 +569,10 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                 _ensure_logged_in(page, url)
                 campaign = _extract_campaign_details(page, url, name_hint=name_hint)
                 if campaign is not None:
+                    extra = (entry.get("source_clip_url") or "").strip()
+                    if extra:
+                        campaign.source_clip_url = extra
+                        print(f"[whop_client debug] Using configured source clip: {extra}")
                     return campaign
             return None
         finally:
