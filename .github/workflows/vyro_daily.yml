@@ -25,7 +25,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
 
       - name: Fix ImageMagick security policy for text rendering
-        run: sudo sed -i '/pattern="@*"/d' /etc/ImageMagick-6/policy.xml || true
+        run: |
+          set -e
+          for f in /etc/ImageMagick-6/policy.xml /etc/ImageMagick/policy.xml; do
+            if [ -f "$f" ]; then
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read" pattern="@*"/g' "$f"
+              echo "patched $f"
+              grep -n '@\*' "$f" || true
+            fi
+          done
+          convert -list policy | grep -A1 -i 'path' || true
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -103,6 +112,6 @@ jobs:
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          git add processed_campaigns.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update processed campaigns [skip ci]"
+          git add processed_campaigns.json processed_clips.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Update processed clips [skip ci]"
           git push || true
