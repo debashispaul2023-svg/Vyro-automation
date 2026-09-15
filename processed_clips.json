@@ -1,4 +1,11 @@
 {
   "closed_campaigns": [],
-  "clips": []
+  "clips": [
+    {
+      "campaign_id": "fb1afaae-65b7-490f-bbed-c48ac6382486",
+      "clip_id": "1p2_Z9gpT4k19EPQop9lyJRlPZ3qVJYXP",
+      "url": "https://drive.google.com/file/d/1p2_Z9gpT4k19EPQop9lyJRlPZ3qVJYXP/view",
+      "kind": "drive_file"
+    }
+  ]
 }
