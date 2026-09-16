@@ -666,6 +666,8 @@ def list_content_folder_clips(
             continue
         seen.add(cid)
         out.append({"clip_id": cid, "url": url, "kind": kind, "name": cid})
+    order = {"drive_folder": 0, "drive_file": 1, "direct": 2, "youtube": 3, "mediasilo": 8}
+    out.sort(key=lambda row: order.get(row.get("kind") or "", 9))
     print(f"[resolver] content-folder listed {len(out)} clip(s)")
     return out
 

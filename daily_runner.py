@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -173,39 +174,116 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     clips = _list_campaign_clips(campaign)
     if not clips:
         return None
-    for clip in clips:
-        if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"]):
-            print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
-            return clip
-    print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
-    return None
+    unused = [
+        clip
+        for clip in clips
+        if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"])
+    ]
+    if not unused:
+        print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
+        return None
+    usable = [c for c in unused if c.get("kind") in ("drive_file", "drive_folder", "direct")]
+    if usable:
+        clip = usable[0]
+        print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
+        return clip
+    clip = unused[0]
+    print(
+        f"[clips] no Drive clip left; next is {clip.get('kind')} "
+        f"{clip.get('name') or clip['clip_id']} (may fail to download)"
+    )
+    return clip
+
+
+def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
+    """Fisch: spoken name + end CTA. Keeps original gameplay audio."""
+    blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}".lower()
+    if "fisch" not in blob and "how to fisch" not in blob:
+        return
+    spoken = "How to Fisch"
+    work = "output/fisch_pack.mp4"
+    tts = "output/fisch_tts.wav"
+    os.makedirs("output", exist_ok=True)
+    tts_ok = False
+    for cmd in (
+        ["espeak", "-s", "140", "-w", tts, spoken],
+        ["espeak-ng", "-s", "140", "-w", tts, spoken],
+    ):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=20)
+            tts_ok = os.path.isfile(tts) and os.path.getsize(tts) > 100
+            if tts_ok:
+                print(f"[fisch] TTS via {cmd[0]}")
+                break
+        except Exception as exc:
+            print(f"[fisch] {cmd[0]} skipped: {exc}")
+    draw = (
+        "drawtext=text='HOW TO FISCH':fontcolor=white:fontsize=72:"
+        "borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-280:"
+        "enable='gte(t,8)',"
+        "drawtext=text='Game is called How to Fisch on Roblox':fontcolor=yellow:"
+        "fontsize=36:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-180:"
+        "enable='gte(t,8)'"
+    )
+    ff = ["ffmpeg", "-y", "-i", video_path]
+    if tts_ok:
+        ff += [
+            "-i", tts,
+            "-filter_complex",
+            f"[0:v]{draw}[v];[0:a]volume=1[a0];[1:a]volume=1.2,adelay=400|400[a1];"
+            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-c:a", "aac", "-shortest", work,
+        ]
+    else:
+        ff += ["-vf", draw, "-c:a", "copy", "-c:v", "libx264", work]
+    try:
+        subprocess.run(ff, check=True, capture_output=True, timeout=120)
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, video_path)
+            print("[fisch] end-card + CTA burned in")
+        else:
+            print("[fisch] pack output missing")
+    except Exception as exc:
+        print(f"[fisch] pack failed (keeping plain render): {exc}")
 
 
 def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetadata) -> str:
-    """Rules first. Missing required lines get appended so IG does not ship a naked caption."""
-    raw = f"{campaign.name or ''}\n{campaign.requirements_text or ''}\n{meta.title}\n{meta.description}"
-    desc = (meta.description or "").strip()
-    if "skip to content" in desc.lower() or "link your discord" in desc.lower():
-        desc = ""
-    lines = [meta.title.strip(), desc]
-    low = "\n".join(lines).lower()
+    """Campaign rules first. Never paste Whop chrome or #shorts spam."""
+    raw = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
     raw_l = raw.lower()
-    if "zodiac" in raw_l and "zodiac" not in low:
-        lines.append("Zodiac Beta Weekend 2 — play free this weekend.")
-    if "call of duty" in raw_l or "callofduty" in raw_l:
-        if "@callofduty" not in low:
-            lines.append("@Callofduty")
-    if "#ad" not in low:
-        lines.append("#Ad")
-    for tag in req.mandatory_hashtags or []:
-        token = tag if str(tag).startswith("#") else f"#{tag}"
-        if token.lower() not in low:
-            lines.append(token)
-    for link in req.required_links or []:
-        if link and link not in "\n".join(lines):
-            lines.append(link)
-    caption = "\n".join(x for x in lines if x).strip()
-    print(f"[caption] {caption[:240]!r}")
+    if "fisch" in raw_l or "how to fisch" in raw_l:
+        body = (
+            "This is the first ever FPS and fishing game in Roblox.\n"
+            "Game is called How to Fisch on Roblox."
+        )
+        extras = ["#Roblox", "#Fisch", "#HowToFisch"]
+    elif "zodiac" in raw_l and "weekend" in raw_l:
+        body = "zodiac just dropped in beta weekend 2 and it's free to play"
+        extras = ["#COD", "#Zodiac", "#MW4"]
+    elif "modern warfare" in raw_l or "mw4" in raw_l:
+        body = "MW4 multiplayer beta gameplay — drop in and play"
+        extras = ["#COD", "#MW4", "#CallOfDuty"]
+    elif "roblox" in raw_l:
+        body = "Roblox gameplay clip"
+        extras = ["#Roblox", "#RobloxClips"]
+    else:
+        title = re.sub(r"#\S+", "", meta.title or campaign.name or "New clip").strip()
+        body = title or "New official campaign clip"
+        extras = []
+        for tag in (req.mandatory_hashtags or [])[:3]:
+            token = tag if str(tag).startswith("#") else f"#{tag}"
+            extras.append(token)
+
+    lines = [body]
+    if "callofduty" in raw_l or "call of duty" in raw_l or "zodiac" in raw_l:
+        lines.append("@Callofduty")
+    lines.append("#Ad")
+    for tag in extras[:3]:
+        if tag.lower() not in ("#ad", "#advertisement", "#sponsored"):
+            lines.append(tag)
+    caption = "\n".join(lines)
+    print(f"[caption] {caption!r}")
     return caption
 
 
@@ -289,12 +367,15 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
     if vyro_campaign is not None and _screen_campaign("vyro", vyro_campaign):
         return "vyro", vyro_campaign
 
-    try:
-        newly_joined = whop_discover_and_join_new_campaigns(score_fn=ai_score_campaign, max_new=2)
-        if newly_joined:
-            print(f"Auto-joined {len(newly_joined)} new Whop campaign(s): {newly_joined}")
-    except Exception as exc:
-        print(f"Whop auto-discovery/join failed: {exc}", file=sys.stderr)
+    if (os.environ.get("WHOP_ENABLE_DISCOVER") or "").strip().lower() in ("1", "true", "yes"):
+        try:
+            newly_joined = whop_discover_and_join_new_campaigns(score_fn=ai_score_campaign, max_new=2)
+            if newly_joined:
+                print(f"Auto-joined {len(newly_joined)} new Whop campaign(s): {newly_joined}")
+        except Exception as exc:
+            print(f"Whop auto-discovery/join failed: {exc}", file=sys.stderr)
+    else:
+        print("[whop] Discover auto-join off (set WHOP_ENABLE_DISCOVER=1 to turn on).")
 
     try:
         whop_campaign = whop_check_configured_campaigns()
@@ -447,6 +528,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             fallback_caption_text=hook,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
+        _apply_campaign_pack(campaign, OUTPUT_PATH)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")
@@ -561,6 +643,19 @@ def main() -> int:
         return 0
     if status == 2:
         print("Rendered but no IG/YouTube publish. Clip NOT marked used.")
+        return 0
+    if nxt.get("kind") == "mediasilo":
+        clip_log["clips"].append(
+            {
+                "campaign_id": campaign.campaign_id,
+                "clip_id": nxt["clip_id"],
+                "url": nxt.get("url", ""),
+                "kind": "mediasilo",
+                "status": "download_failed",
+            }
+        )
+        _save_clip_log(clip_log)
+        print("MediaSilo has no downloadable file. Marked skipped so Daily will not loop-fail.")
         return 0
     return status
 
