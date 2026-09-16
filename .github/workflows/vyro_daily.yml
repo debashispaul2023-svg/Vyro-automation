@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install ffmpeg + imagemagick
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick espeak espeak-ng fonts-dejavu-core
 
       - name: Fix ImageMagick security policy for text rendering
         run: |
