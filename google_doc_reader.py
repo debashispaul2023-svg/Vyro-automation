@@ -138,8 +138,13 @@ _CONTENT_FOLDER_LABELS = (
     "official footage",
     "source footage",
     "footage folder",
+    "footage assets",
+    "footage",
+    "backup",
     "asset folder",
+    "assets",
     "resources folder",
+    "how to fisch footage",
 )
 
 
@@ -169,10 +174,22 @@ def _html_export_links(doc_id: str) -> list[str]:
             continue
         label = re.sub(r"<[^>]+>", " ", raw_text)
         label = unescape(re.sub(r"\s+", " ", label)).strip().lower()
-        if any(tag in label for tag in _CONTENT_FOLDER_LABELS) or "mediasilo.com/review" in url.lower():
+        driveish = "drive.google.com" in url.lower() or "docs.google.com/open" in url.lower()
+        labeled = any(tag in label for tag in _CONTENT_FOLDER_LABELS)
+        if labeled or "mediasilo.com/review" in url.lower() or driveish:
             preferred.append(url)
             links.append(f"CONTENT_FOLDER={url}")
         links.append(url)
+    for fid in re.findall(r"/drive/folders/([a-zA-Z0-9_-]+)", resp.text):
+        url = f"https://drive.google.com/drive/folders/{fid}"
+        if url not in links:
+            preferred.append(url)
+            links.append(f"CONTENT_FOLDER={url}")
+            links.append(url)
+    for fid in re.findall(r"/file/d/([a-zA-Z0-9_-]+)", resp.text):
+        url = f"https://drive.google.com/file/d/{fid}/view"
+        if url not in links:
+            links.append(url)
     if preferred:
         print(f"[doc] Content Folder link(s): {preferred}")
     return links
@@ -685,3 +702,36 @@ if __name__ == "__main__":
     print("--- Resolved source clips ---")
     for url in resolve_candidate_source_clips(text):
         print(url)
+
+
+def find_campaign_icon_in_folder(folder_url_or_id: str) -> dict[str, str] | None:
+    """Find Game_Image / logo still in a Drive folder (not a video)."""
+    folder_id = extract_drive_folder_id(folder_url_or_id) or folder_url_or_id
+    if not folder_id or "/" in folder_id:
+        return None
+    try:
+        key = _drive_api_key()
+        entries = list_drive_folder_files(folder_id, key)
+    except Exception as exc:
+        print(f"[icon] folder list failed: {exc}")
+        return None
+    prefer = []
+    images = []
+    for item in entries:
+        name = (item.get("name") or "")
+        mime = (item.get("mimeType") or "")
+        fid = item.get("id") or ""
+        if not fid:
+            continue
+        low = name.lower()
+        is_img = mime.startswith("image/") or low.endswith((".png", ".jpg", ".jpeg", ".webp"))
+        if not is_img:
+            continue
+        rec = {"clip_id": fid, "name": name, "url": drive_file_url(fid), "kind": "image"}
+        images.append(rec)
+        if "game_image" in low or "icon" in low or "logo" in low:
+            prefer.append(rec)
+    hit = (prefer or images or [None])[0]
+    if hit:
+        print(f"[icon] using {hit['name']} ({hit['clip_id']})")
+    return hit

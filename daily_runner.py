@@ -37,12 +37,13 @@ from typing import Union
 
 import requests
 
-from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_score_campaign
+from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_rank_clip_names, ai_score_campaign
 from checker import ValidationError, validate_or_raise
 from clip_picker import ClipPickError, collect_clips_from_doc_text, download_drive_file, pick_best_clip
 from google_doc_reader import (
     GoogleDocReadError,
     extract_drive_file_id,
+    find_campaign_icon_in_folder,
     list_content_folder_clips,
     resolve_and_download_footage,
 )
@@ -160,11 +161,29 @@ def _pick_drive_folder(folder_url: str, dest_path: str) -> None:
 
 
 def _list_campaign_clips(campaign: Campaign) -> list[dict[str, str]]:
-    return list_content_folder_clips(
-        source_clip_url=getattr(campaign, "source_clip_url", "") or "",
+    folder = getattr(campaign, "source_clip_url", "") or ""
+    clips = list_content_folder_clips(
+        source_clip_url=folder,
         reference_doc_url=getattr(campaign, "reference_doc_url", None) or "",
         brief_text=campaign.requirements_text or campaign.name or "",
     )
+    _maybe_download_game_icon(folder)
+    return clips
+
+
+def _maybe_download_game_icon(folder_url: str) -> None:
+    if not folder_url or os.path.isfile("output/game_icon.png") or os.path.isfile("output/game_icon.jpg"):
+        return
+    icon = find_campaign_icon_in_folder(folder_url)
+    if not icon:
+        return
+    os.makedirs("output", exist_ok=True)
+    dest = "output/game_icon.png"
+    try:
+        download_drive_file(icon["clip_id"], dest, (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip())
+        print(f"[icon] saved {dest}")
+    except Exception as exc:
+        print(f"[icon] download failed: {exc}")
 
 
 def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
@@ -183,10 +202,20 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
         return None
     usable = [c for c in unused if c.get("kind") in ("drive_file", "drive_folder", "direct")]
-    if usable:
-        clip = usable[0]
-        print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
-        return clip
+    pool = usable or unused
+    names = [c.get("name") or "" for c in pool]
+    ranked = []
+    try:
+        ranked = ai_rank_clip_names(names, campaign.requirements_text or campaign.name or "")
+    except Exception as exc:
+        print(f"[ai] rank failed: {exc}")
+    if ranked:
+        order = {n.lower(): i for i, n in enumerate(ranked)}
+        pool.sort(key=lambda c: order.get((c.get("name") or "").lower(), 999))
+        print(f"[clips] AI order starts with {pool[0].get('name')}")
+    clip = pool[0]
+    print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
+    return clip
     clip = unused[0]
     print(
         f"[clips] no Drive clip left; next is {clip.get('kind')} "
@@ -225,8 +254,29 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         "fontsize=36:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-180:"
         "enable='gte(t,8)'"
     )
+    icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
+    if icon:
+        draw = (
+            f"[0:v]{draw}[base];"
+            f"[1:v]scale=280:280:force_original_aspect_ratio=decrease[ic];"
+            f"[base][ic]overlay=(W-w)/2:H-h-320:enable='gte(t,8)'[v]"
+        )
+        print(f"[fisch] overlay icon {icon}")
     ff = ["ffmpeg", "-y", "-i", video_path]
-    if tts_ok:
+    if icon:
+        ff += ["-i", icon]
+    if icon and tts_ok:
+        ff += [
+            "-i", tts,
+            "-filter_complex",
+            draw + ";[0:a]volume=1[a0];[2:a]volume=1.2,adelay=400|400[a1];"
+            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-c:a", "aac", "-shortest", work,
+        ]
+    elif icon:
+        ff += ["-filter_complex", draw, "-map", "[v]", "-c:a", "copy", "-c:v", "libx264", work]
+    elif tts_ok:
         ff += [
             "-i", tts,
             "-filter_complex",

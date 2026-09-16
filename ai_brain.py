@@ -292,3 +292,47 @@ if __name__ == "__main__":
         print(ai_score_campaign(sample_text))
     else:
         print("Unknown mode. Use 'parse' or 'score'.")
+
+
+# ---------------------------------------------------------------------------
+# 4. Rank official folder clips against campaign rules
+# ---------------------------------------------------------------------------
+
+_RANK_PROMPT = """\
+You pick official gameplay clips for a paid campaign.
+
+Campaign rules:
+{rules}
+
+Clip filenames in the folder:
+{names}
+
+Pick the 8 best filenames that likely show the core mechanic (for How to Fisch:
+catching fish, fighting, upgrading gear, not a still logo). Skip names like
+Game_Image, icon, logo, banner, thumbnail.
+
+Respond with ONLY JSON:
+{{
+  "ranked_names": ["file1.mp4", "file2.mp4"]
+}}
+"""
+
+
+def ai_rank_clip_names(clip_names: list[str], requirements: str) -> list[str]:
+    """Return preferred clip filenames. Empty list on failure."""
+    names = [n for n in clip_names if n]
+    if not names:
+        return []
+    try:
+        data = _call_json(
+            _RANK_PROMPT.format(
+                rules=(requirements or "")[:3500],
+                names="\n".join(names[:80]),
+            )
+        )
+        ranked = [str(x) for x in (data.get("ranked_names") or []) if x]
+        print(f"[ai] ranked {len(ranked)} clip name(s)")
+        return ranked
+    except Exception as exc:
+        print(f"[ai] clip rank skipped: {exc}")
+        return []
