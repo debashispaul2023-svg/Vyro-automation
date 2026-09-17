@@ -597,6 +597,16 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
     )
 
 
+def _looks_like_whop_chrome(text: str) -> bool:
+    low = (text or "").lower()
+    if len(low) < 80:
+        return True
+    chrome = ("your balance will appear", "ctrl+k", "recommended for you", "set up your business", "total balance")
+    if any(x in low for x in chrome) and "how to fisch" not in low and "submit clip" not in low:
+        return True
+    return False
+
+
 def check_configured_campaigns() -> Optional[WhopCampaign]:
     configured = _load_configured_campaigns()
     if not configured:
@@ -615,6 +625,9 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                     campaign = _extract_campaign_details(page, url, name_hint=name_hint)
                 except Exception as exc:
                     print(f"[whop_client] page open failed ({exc}); using config fallback if possible")
+                    campaign = None
+                if campaign is not None and _looks_like_whop_chrome(campaign.requirements_text):
+                    print("[whop_client] scraped page is Whop chrome, not the campaign — using JSON fallback")
                     campaign = None
                 if campaign is None:
                     campaign = _campaign_from_config(entry)

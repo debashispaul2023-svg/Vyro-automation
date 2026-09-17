@@ -468,6 +468,11 @@ def _screen_campaign(platform: str, campaign: Campaign) -> bool:
 
     print(f"AI screen ({platform}): good={score.is_good} — {score.reason}")
     if not score.is_good:
+        has_folder = bool(getattr(campaign, "source_clip_url", "") or "")
+        named = (campaign.name or "").lower()
+        if has_folder and named and "content rewards" not in named:
+            print("[screen] AI rejected chrome text, but Drive folder is configured — keeping campaign")
+            return True
         print(f"Skipping {platform} campaign '{campaign.campaign_id}': {score.reason}")
         return False
     return True
