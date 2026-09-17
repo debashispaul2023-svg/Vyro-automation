@@ -50,6 +50,7 @@ from google_doc_reader import (
 from instagram_uploader import InstagramUploadError, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
+from tts_engine import generate_voiceover, phrases_from_words
 from requirements_parser import CampaignRequirements, RequirementsParseError, parse_campaign
 from vyro_client import VyroCampaign, VyroClientError
 from vyro_client import run_check as vyro_run_check
@@ -309,48 +310,21 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
 
 
 def _tts_spoken(text: str, dest_wav: str) -> bool:
-    """ElevenLabs if key exists, else espeak."""
+    """ElevenLabs only. No espeak."""
     if not (text or "").strip():
         return False
-    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
-    voice = (os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM").strip()
-    if key:
-        try:
-            resp = requests.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
-                headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
-                json={
-                    "text": text.strip(),
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": {
-                        "stability": 0.35,
-                        "similarity_boost": 0.85,
-                        "style": 0.45,
-                        "use_speaker_boost": True,
-                    },
-                },
-                timeout=60,
-            )
-            if resp.status_code == 200 and resp.content:
-                mp3 = dest_wav.replace(".wav", ".mp3")
-                PathWrite = dest_wav
-                with open(mp3, "wb") as f:
-                    f.write(resp.content)
-                subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
-                print("[voice] ElevenLabs TTS ok")
-                return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
-            print(f"[voice] ElevenLabs HTTP {resp.status_code}: {resp.text[:180]}")
-        except Exception as exc:
-            print(f"[voice] ElevenLabs failed: {exc}")
-    for cmd in (["espeak", "-s", "140", "-w", dest_wav, text], ["espeak-ng", "-s", "140", "-w", dest_wav, text]):
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=20)
-            if os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 100:
-                print(f"[voice] fallback {cmd[0]}")
-                return True
-        except Exception as exc:
-            print(f"[voice] {cmd[0]} skipped: {exc}")
-    return False
+    mp3 = dest_wav.replace(".wav", ".mp3")
+    path, words = generate_voiceover(text, mp3)
+    if not path:
+        return False
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", path, dest_wav], check=True, capture_output=True, timeout=30)
+    except Exception as exc:
+        print(f"[voice] mp3->wav failed: {exc}")
+        return False
+    setattr(_tts_spoken, "last_words", words)
+    return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
+
 
 
 def _quality_boost(video_path: str) -> None:
@@ -403,6 +377,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         "In this Roblox game you catch strange fish, upgrade your gear, and fight. "
         "The game is called How to Fisch."
     )
+    _tts_spoken.last_words = []
     if plan and not plan.get("need_spoken_voice"):
         spoken = ""
     work = "output/fisch_pack.mp4"
@@ -420,14 +395,21 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     except Exception:
         pass
     end_at = max(0.0, dur - 3.2)
-    lines = [
-        (0.0, min(3.2, dur), "I found the WEIRDEST Roblox game", "yellow", "black"),
-        (3.2, min(8.0, dur), "Catch fish. Then FIGHT.", "0x00F5FF", "black"),
-        (8.0, min(13.0, dur), "Upgrade gear. Get stronger.", "0xFF3D8A", "white"),
-        (13.0, min(end_at, dur), "Bosses on every island", "0xB8FF00", "black"),
-        (end_at, dur, "Save this. Hit follow.", "yellow", "black"),
-        (end_at, dur, "Game is called How to Fisch", "yellow", "black"),
+    words = list(getattr(_tts_spoken, "last_words", []) or [])
+    timed = phrases_from_words(words, spoken) if spoken else []
+    palette = [
+        ("yellow", "black"),
+        ("0x00F5FF", "black"),
+        ("0xFF3D8A", "white"),
+        ("0xB8FF00", "black"),
     ]
+    lines = []
+    for i, (a, b, txt) in enumerate(timed):
+        box, ink = palette[i % len(palette)]
+        lines.append((a, min(b, dur), txt, box, ink))
+    lines.append((end_at, dur, "Save this. Hit follow.", "yellow", "black"))
+    if not any("How to Fisch" in (row[2] or "") for row in lines):
+        lines.append((end_at, dur, "Game is called How to Fisch", "yellow", "black"))
     parts = []
     for i, (a, b, txt, box, ink) in enumerate(lines):
         if b <= a:
