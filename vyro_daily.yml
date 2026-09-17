@@ -1,0 +1,119 @@
+name: Vyro Daily Full Automation
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg + imagemagick
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick espeak espeak-ng fonts-dejavu-core
+
+      - name: Fix ImageMagick security policy for text rendering
+        run: |
+          set -e
+          for f in /etc/ImageMagick-6/policy.xml /etc/ImageMagick/policy.xml; do
+            if [ -f "$f" ]; then
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read" pattern="@*"/g' "$f"
+              echo "patched $f"
+              grep -n '@\*' "$f" || true
+            fi
+          done
+          convert -list policy | grep -A1 -i 'path' || true
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: python -m playwright install --with-deps chromium
+
+      - name: Restore YouTube OAuth token if present
+        env:
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          YOUTUBE_TOKEN_B64: ${{ secrets.YOUTUBE_TOKEN_B64 }}
+        run: |
+          python - << 'PY'
+          import base64, json, os, sys
+
+          raw_json = (os.environ.get("YOUTUBE_TOKEN_JSON") or "").strip()
+          raw_b64 = (os.environ.get("YOUTUBE_TOKEN_B64") or "").strip()
+
+          def looks_like_token(text: str) -> bool:
+              try:
+                  data = json.loads(text)
+              except json.JSONDecodeError:
+                  return False
+              return isinstance(data, dict) and (
+                  "refresh_token" in data or "token" in data or "client_id" in data
+              )
+
+          def try_b64(blob: str) -> str | None:
+              if not blob:
+                  return None
+              compact = "".join(blob.split())
+              for candidate in (blob, compact):
+                  try:
+                      decoded = base64.b64decode(candidate, validate=False).decode("utf-8")
+                  except Exception:
+                      continue
+                  if looks_like_token(decoded):
+                      return decoded
+              return None
+
+          token = raw_json if looks_like_token(raw_json) else None
+          if token is None:
+              token = try_b64(raw_json) or try_b64(raw_b64)
+          if not token:
+              print("No usable YouTube token — Daily will skip YT and still try Instagram")
+              sys.exit(0)
+          with open("token.json", "w", encoding="utf-8") as f:
+              json.dump(json.loads(token), f)
+          print(f"Wrote token.json ({os.path.getsize('token.json')} bytes)")
+          PY
+
+      - name: Run daily pipeline
+        env:
+          PYTHONUNBUFFERED: "1"
+          VYRO_SESSION_COOKIE: ${{ secrets.VYRO_SESSION_COOKIE }}
+          WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
+          ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+        run: python daily_runner.py
+
+      - name: Upload rendered short as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vyro-daily-short
+          path: output/short.mp4
+          if-no-files-found: ignore
+
+      - name: Commit updated processed_campaigns.json
+        if: always()
+        run: |
+          git config user.name "vyro-bot"
+          git config user.email "vyro-bot@users.noreply.github.com"
+          git add processed_campaigns.json processed_clips.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Update processed clips [skip ci]"
+          git push || true

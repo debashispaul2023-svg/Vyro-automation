@@ -186,6 +186,70 @@ def _maybe_download_game_icon(folder_url: str) -> None:
         print(f"[icon] download failed: {exc}")
 
 
+
+def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict]:
+    """3-4 unused official clips so the edit can explain the loop like the example."""
+    first = _next_unused_clip(campaign, log)
+    if first is None:
+        return []
+    clips = _list_campaign_clips(campaign)
+    unused = [
+        c for c in clips
+        if not _clip_already_used(log, campaign.campaign_id, c["clip_id"])
+        and c.get("kind") in ("drive_file", "direct")
+    ]
+    pack = [first]
+    for c in unused:
+        if c["clip_id"] == first["clip_id"]:
+            continue
+        pack.append(c)
+        if len(pack) >= want:
+            break
+    print(f"[clips] merge pack ({len(pack)}): " + ", ".join(x.get("name") or x["clip_id"] for x in pack))
+    return pack
+
+
+def _stitch_official_clips(clips: list[dict], dest_path: str) -> str:
+    key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+    if not key:
+        raise GoogleDocReadError("GOOGLE_DRIVE_API_KEY missing")
+    os.makedirs("work/merge", exist_ok=True)
+    parts = []
+    for i, clip in enumerate(clips):
+        fid = clip.get("clip_id") or extract_drive_file_id(clip.get("url") or "")
+        if not fid:
+            continue
+        raw = f"work/merge/raw_{i}.mp4"
+        even = f"work/merge/even_{i}.mp4"
+        download_drive_file(fid, raw, key)
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", raw,
+                "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2", even,
+            ],
+            check=True, capture_output=True, timeout=180,
+        )
+        parts.append(even)
+        print(f"[merge] part {i+1}/{len(clips)} {clip.get('name')}")
+    if not parts:
+        raise GoogleDocReadError("No clips downloaded to merge")
+    if len(parts) == 1:
+        shutil.copyfile(parts[0], dest_path)
+        return clips[0].get("url") or parts[0]
+    lst = "work/merge/list.txt"
+    with open(lst, "w", encoding="utf-8") as f:
+        for part in parts:
+            f.write(f"file '{os.path.abspath(part)}'\n")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", dest_path],
+        check=True, capture_output=True, timeout=120,
+    )
+    print(f"[merge] wrote {dest_path} from {len(parts)} clips")
+    return dest_path
+
+
 def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     if campaign.campaign_id in set(log.get("closed_campaigns") or []):
         print(f"Campaign {campaign.campaign_id} is closed — never reuse its folder.")
@@ -203,10 +267,27 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         return None
     usable = [c for c in unused if c.get("kind") in ("drive_file", "drive_folder", "direct")]
     pool = usable or unused
+    long_enough = []
+    for c in pool:
+        try:
+            ms = float(c.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            ms = 0
+        if ms >= 10000:
+            long_enough.append(c)
+    if long_enough:
+        print(f"[clips] dropped {len(pool) - len(long_enough)} clips under 10s")
+        pool = long_enough
+    else:
+        print("[clips] no 10s+ clip left; using remaining pool")
     names = [c.get("name") or "" for c in pool]
     ranked = []
     try:
-        ranked = ai_rank_clip_names(names, campaign.requirements_text or campaign.name or "")
+        ranked = ai_rank_clip_names(
+            names,
+            (campaign.requirements_text or "")
+            + " Prefer clips that show catching fish, upgrading gear, or fighting. Skip stills.",
+        )
     except Exception as exc:
         print(f"[ai] rank failed: {exc}")
     if ranked:
@@ -215,12 +296,6 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         print(f"[clips] AI order starts with {pool[0].get('name')}")
     clip = pool[0]
     print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
-    return clip
-    clip = unused[0]
-    print(
-        f"[clips] no Drive clip left; next is {clip.get('kind')} "
-        f"{clip.get('name') or clip['clip_id']} (may fail to download)"
-    )
     return clip
 
 
@@ -236,7 +311,16 @@ def _tts_spoken(text: str, dest_wav: str) -> bool:
             resp = requests.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
                 headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
-                json={"text": text.strip(), "model_id": "eleven_monolingual_v1"},
+                json={
+                    "text": text.strip(),
+                    "model_id": "eleven_multilingual_v2",
+                    "voice_settings": {
+                        "stability": 0.35,
+                        "similarity_boost": 0.85,
+                        "style": 0.45,
+                        "use_speaker_boost": True,
+                    },
+                },
                 timeout=60,
             )
             if resp.status_code == 200 and resp.content:
@@ -307,7 +391,10 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         return
     if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
         return
-    spoken = plan.get("speak_text") or "How to Fisch"
+    spoken = plan.get("speak_text") or (
+        "In this Roblox game you catch strange fish, upgrade your gear, and fight. "
+        "The game is called How to Fisch."
+    )
     if plan and not plan.get("need_spoken_voice"):
         spoken = ""
     work = "output/fisch_pack.mp4"
@@ -372,7 +459,8 @@ def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetada
     raw_l = raw.lower()
     if "fisch" in raw_l or "how to fisch" in raw_l:
         body = (
-            "This is the first ever FPS and fishing game in Roblox.\n"
+            "THIS ROBLOX GAME IS SO PEAK\n"
+            "Catch fish, upgrade gear, fight to survive.\n"
             "Game is called How to Fisch on Roblox."
         )
         extras = ["#Roblox", "#Fisch", "#HowToFisch"]
@@ -573,10 +661,10 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
     if "fisch" in blob or "how to fisch" in blob:
         print("[meta] Fisch lock — official campaign wording only")
         return VideoMetadata(
-            title="This Roblox game is FPS + fishing — How to Fisch",
+            title="THIS ROBLOX GAME IS SO PEAK — How to Fisch #roblox #shorts",
             description=(
+                "In this Roblox game you catch fish, upgrade gear, and fight bosses.\n"
                 "Game is called How to Fisch on Roblox.\n"
-                "Catch strange fish, upgrade your gear, and fight to survive.\n"
                 "https://www.roblox.com/games/119870009085173/How-to-Fisch"
             ),
             tags=["#Roblox", "#Fisch", "#HowToFisch", "#shorts"],
@@ -625,7 +713,10 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
     req = _parse_requirements(campaign)
 
     try:
-        if preferred_clip and preferred_clip.get("kind") == "drive_file":
+        extra = list(getattr(campaign, "_merge_pack", None) or [])
+        if extra and extra[0].get("kind") == "drive_file":
+            resolved_source = _stitch_official_clips(extra, SOURCE_CLIP_PATH)
+        elif preferred_clip and preferred_clip.get("kind") == "drive_file":
             fid = preferred_clip.get("clip_id") or extract_drive_file_id(preferred_clip.get("url") or "")
             drive_key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
             if not fid or not drive_key:
@@ -758,23 +849,26 @@ def main() -> int:
 
     print(f"Found active campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
 
-    nxt = _next_unused_clip(campaign, clip_log)
-    if nxt is None:
+    pack = _next_unused_pack(campaign, clip_log, want=4)
+    if not pack:
         print("No unused Content Folder clip left on this campaign (or folder unreadable).")
         return 0
+    campaign._merge_pack = pack  # type: ignore[attr-defined]
+    nxt = pack[0]
 
     status = process_campaign(platform, campaign, preferred_clip=nxt)
     if status == 0:
-        clip_log["clips"].append(
-            {
-                "campaign_id": campaign.campaign_id,
-                "clip_id": nxt["clip_id"],
-                "url": nxt.get("url", ""),
-                "kind": nxt.get("kind", ""),
-            }
-        )
+        for piece in pack:
+            clip_log["clips"].append(
+                {
+                    "campaign_id": campaign.campaign_id,
+                    "clip_id": piece["clip_id"],
+                    "url": piece.get("url", ""),
+                    "kind": piece.get("kind", ""),
+                }
+            )
         _save_clip_log(clip_log)
-        print(f"Recorded clip {nxt['clip_id']} for campaign {campaign.campaign_id}.")
+        print(f"Recorded {len(pack)} merged clip(s) for campaign {campaign.campaign_id}.")
         return 0
     if status == 2:
         print("Rendered but no IG/YouTube publish. Clip NOT marked used.")

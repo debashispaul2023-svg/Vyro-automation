@@ -375,7 +375,7 @@ def ai_plan_edit_tools(requirements: str) -> dict:
     must_cap = any(x in low for x in ("on-screen caption", "burned caption", "subtitle"))
     reject_lq = any(x in low for x in ("low-quality", "low quality", "poorly presented"))
     fallback = {
-        "speak_text": "How to Fisch" if must_speak and "fisch" in low else "",
+        "speak_text": ("In this Roblox game you catch strange fish, upgrade your gear, and fight. The game is called How to Fisch." if must_speak and "fisch" in low else ""),
         "cta_text": "Game is called How to Fisch on Roblox" if must_cta and "fisch" in low else "",
         "end_title": "HOW TO FISCH" if must_icon and "fisch" in low else "",
         "need_captions": must_cap or must_cta,

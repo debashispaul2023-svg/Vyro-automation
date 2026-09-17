@@ -674,7 +674,7 @@ def list_content_folder_clips(
             for clip in collect_video_clips_in_drive_folder(url):
                 if clip.file_id not in seen:
                     seen.add(clip.file_id)
-                    out.append({"clip_id": clip.file_id, "url": clip.url, "kind": "drive_file", "name": clip.name})
+                    out.append({"clip_id": clip.file_id, "url": clip.url, "kind": "drive_file", "name": clip.name, "duration_ms": str(clip.duration_ms or 0)})
             continue
         if kind == "unknown":
             continue
