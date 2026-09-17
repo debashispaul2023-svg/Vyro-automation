@@ -98,6 +98,7 @@ jobs:
           ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
           ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
         run: python daily_runner.py
 
