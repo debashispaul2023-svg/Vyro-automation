@@ -309,39 +309,41 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
 
 
 def _tts_spoken(text: str, dest_wav: str) -> bool:
-    """ElevenLabs if key exists, else espeak."""
+    """ElevenLabs with key rotation, else espeak fallback."""
     if not (text or "").strip():
         return False
-    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+
+    keys_env = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
     voice = (os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM").strip()
-    if key:
-        try:
-            resp = requests.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
-                headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
-                json={
-                    "text": text.strip(),
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": {
-                        "stability": 0.35,
-                        "similarity_boost": 0.85,
-                        "style": 0.45,
-                        "use_speaker_boost": True,
-                    },
-                },
-                timeout=60,
-            )
-            if resp.status_code == 200 and resp.content:
-                mp3 = dest_wav.replace(".wav", ".mp3")
-                PathWrite = dest_wav
-                with open(mp3, "wb") as f:
-                    f.write(resp.content)
-                subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
-                print("[voice] ElevenLabs TTS ok")
-                return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
-            print(f"[voice] ElevenLabs HTTP {resp.status_code}: {resp.text[:180]}")
-        except Exception as exc:
-            print(f"[voice] ElevenLabs failed: {exc}")
+
+    if keys_env:
+        # Split by comma and remove empty spaces
+        keys = [k.strip() for k in keys_env.split(",") if k.strip()]
+        total_keys = len(keys)
+
+        for i, key in enumerate(keys, start=1):
+            short_key = key[-4:] if len(key) > 4 else key
+            print(f"[+] Trying ElevenLabs key #{i}/{total_keys} (...{short_key})...")
+            try:
+                resp = requests.post(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
+                    headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
+                    json={"text": text.strip(), "model_id": "eleven_monolingual_v1"},
+                    timeout=60,
+                )
+                if resp.status_code == 200 and resp.content:
+                    mp3 = dest_wav.replace(".wav", ".mp3")
+                    with open(mp3, "wb") as f:
+                        f.write(resp.content)
+                    subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
+                    print(f"[voice] Voiceover generated with ElevenLabs key #{i}")
+                    return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
+                else:
+                    print(f"[!] ElevenLabs key #{i} failed (HTTP {resp.status_code}: {resp.text[:120]}); trying the next key...")
+            except Exception as exc:
+                print(f"[!] ElevenLabs key #{i} error: {exc}")
+
+    # Fallback to espeak
     for cmd in (["espeak", "-s", "140", "-w", dest_wav, text], ["espeak-ng", "-s", "140", "-w", dest_wav, text]):
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=20)
