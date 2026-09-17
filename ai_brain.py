@@ -336,3 +336,69 @@ def ai_rank_clip_names(clip_names: list[str], requirements: str) -> list[str]:
     except Exception as exc:
         print(f"[ai] clip rank skipped: {exc}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# 5. Turn campaign rules into which edit tools to run
+# ---------------------------------------------------------------------------
+
+_PLAN_PROMPT = """\
+Read these campaign rules and decide which edit tools the renderer must run.
+
+Rules:
+{rules}
+
+Respond with ONLY JSON:
+{{
+  "speak_text": "exact words that must be spoken, or empty",
+  "cta_text": "on-screen CTA, or empty",
+  "end_title": "end-card title like HOW TO FISCH, or empty",
+  "need_captions": true,
+  "need_spoken_voice": true,
+  "need_end_icon": true,
+  "need_quality_boost": true,
+  "notes": "one line"
+}}
+If the rules say the name must be spoken, set need_spoken_voice true and speak_text.
+If they say show the game icon at the end, set need_end_icon true.
+If they reject low quality, set need_quality_boost true.
+"""
+
+
+def ai_plan_edit_tools(requirements: str) -> dict:
+    text = (requirements or "").strip()
+    low = text.lower()
+    ready = any(x in low for x in ("ready to upload", "ready-made", "just upload", "no edit", "do not edit"))
+    must_speak = any(x in low for x in ("must be spoken", "spoken somewhere", "voiceover", "voice over", "say the name"))
+    must_icon = any(x in low for x in ("game icon", "icon must", "logo at the end", "shown at the end"))
+    must_cta = any(x in low for x in ("cta", "call to action", "game is called"))
+    must_cap = any(x in low for x in ("on-screen caption", "burned caption", "subtitle"))
+    reject_lq = any(x in low for x in ("low-quality", "low quality", "poorly presented"))
+    fallback = {
+        "speak_text": "How to Fisch" if must_speak and "fisch" in low else "",
+        "cta_text": "Game is called How to Fisch on Roblox" if must_cta and "fisch" in low else "",
+        "end_title": "HOW TO FISCH" if must_icon and "fisch" in low else "",
+        "need_captions": must_cap or must_cta,
+        "need_spoken_voice": must_speak,
+        "need_end_icon": must_icon,
+        "need_quality_boost": reject_lq and not ready,
+        "ready_to_upload": ready,
+        "notes": "heuristic plan",
+    }
+    if not text:
+        return fallback
+    try:
+        data = _call_json(_PLAN_PROMPT.format(rules=text[:4000]))
+        plan = dict(fallback)
+        plan.update({k: data.get(k, plan[k]) for k in plan})
+        if plan.get("ready_to_upload"):
+            plan["need_spoken_voice"] = False
+            plan["need_captions"] = False
+            plan["need_end_icon"] = False
+            plan["need_quality_boost"] = False
+            plan["speak_text"] = ""
+        print(f"[ai] edit plan: {plan}")
+        return plan
+    except Exception as exc:
+        print(f"[ai] edit plan fallback: {exc}")
+        return fallback

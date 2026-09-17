@@ -37,7 +37,7 @@ from typing import Union
 
 import requests
 
-from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_rank_clip_names, ai_score_campaign
+from ai_brain import AIBrainError, ai_generate_metadata, ai_parse_requirements, ai_rank_clip_names, ai_plan_edit_tools, ai_score_campaign
 from checker import ValidationError, validate_or_raise
 from clip_picker import ClipPickError, collect_clips_from_doc_text, download_drive_file, pick_best_clip
 from google_doc_reader import (
@@ -224,28 +224,96 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     return clip
 
 
+
+def _tts_spoken(text: str, dest_wav: str) -> bool:
+    """ElevenLabs if key exists, else espeak."""
+    if not (text or "").strip():
+        return False
+    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+    voice = (os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM").strip()
+    if key:
+        try:
+            resp = requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
+                headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
+                json={"text": text.strip(), "model_id": "eleven_monolingual_v1"},
+                timeout=60,
+            )
+            if resp.status_code == 200 and resp.content:
+                mp3 = dest_wav.replace(".wav", ".mp3")
+                PathWrite = dest_wav
+                with open(mp3, "wb") as f:
+                    f.write(resp.content)
+                subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
+                print("[voice] ElevenLabs TTS ok")
+                return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
+            print(f"[voice] ElevenLabs HTTP {resp.status_code}: {resp.text[:180]}")
+        except Exception as exc:
+            print(f"[voice] ElevenLabs failed: {exc}")
+    for cmd in (["espeak", "-s", "140", "-w", dest_wav, text], ["espeak-ng", "-s", "140", "-w", dest_wav, text]):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=20)
+            if os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 100:
+                print(f"[voice] fallback {cmd[0]}")
+                return True
+        except Exception as exc:
+            print(f"[voice] {cmd[0]} skipped: {exc}")
+    return False
+
+
+def _quality_boost(video_path: str) -> None:
+    work = "output/quality.mp4"
+    ff = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.6:5:5:0.0",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k", work,
+    ]
+    try:
+        subprocess.run(ff, check=True, capture_output=True, timeout=180)
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, video_path)
+            print("[quality] 1080x1920 crf18 boost applied")
+    except Exception as exc:
+        print(f"[quality] skipped: {exc}")
+
+
+
+def _apply_requirement_tools(campaign: Campaign, video_path: str) -> None:
+    """Only tools the rules ask for. Ready-to-upload = no extra edit."""
+    rules = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
+    plan = ai_plan_edit_tools(rules)
+    print(f"[tools] {plan}")
+    if plan.get("ready_to_upload"):
+        print("[tools] rules say ready-to-upload — skip voice/captions/icon/quality")
+        return
+    if plan.get("need_quality_boost"):
+        _quality_boost(video_path)
+    if not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
+        print("[tools] no voice/caption/icon requested")
+        return
+    # pass plan into pack via env-like globals
+    campaign._edit_plan = plan  # type: ignore[attr-defined]
+    _apply_campaign_pack(campaign, video_path)
+
+
 def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     """Fisch: spoken name + end CTA. Keeps original gameplay audio."""
     blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}".lower()
+    plan = getattr(campaign, "_edit_plan", None) or {}
+    if plan.get("ready_to_upload"):
+        return
     if "fisch" not in blob and "how to fisch" not in blob:
         return
-    spoken = "How to Fisch"
+    if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
+        return
+    spoken = plan.get("speak_text") or "How to Fisch"
+    if plan and not plan.get("need_spoken_voice"):
+        spoken = ""
     work = "output/fisch_pack.mp4"
     tts = "output/fisch_tts.wav"
     os.makedirs("output", exist_ok=True)
-    tts_ok = False
-    for cmd in (
-        ["espeak", "-s", "140", "-w", tts, spoken],
-        ["espeak-ng", "-s", "140", "-w", tts, spoken],
-    ):
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=20)
-            tts_ok = os.path.isfile(tts) and os.path.getsize(tts) > 100
-            if tts_ok:
-                print(f"[fisch] TTS via {cmd[0]}")
-                break
-        except Exception as exc:
-            print(f"[fisch] {cmd[0]} skipped: {exc}")
+    tts_ok = bool(spoken) and _tts_spoken(spoken, tts)
     draw = (
         "drawtext=text='HOW TO FISCH':fontcolor=white:fontsize=72:"
         "borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-280:"
@@ -496,6 +564,18 @@ def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
 
 
 def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> VideoMetadata:
+    blob = f"{hook}\n{summary}".lower()
+    if "fisch" in blob or "how to fisch" in blob:
+        print("[meta] Fisch lock — official campaign wording only")
+        return VideoMetadata(
+            title="This Roblox game is FPS + fishing — How to Fisch",
+            description=(
+                "Game is called How to Fisch on Roblox.\n"
+                "Catch strange fish, upgrade your gear, and fight to survive.\n"
+                "https://www.roblox.com/games/119870009085173/How-to-Fisch"
+            ),
+            tags=["#Roblox", "#Fisch", "#HowToFisch", "#shorts"],
+        )
     try:
         ai_meta = ai_generate_metadata(
             hook=hook,
@@ -578,7 +658,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             fallback_caption_text=hook,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
-        _apply_campaign_pack(campaign, OUTPUT_PATH)
+        _apply_requirement_tools(campaign, OUTPUT_PATH)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")

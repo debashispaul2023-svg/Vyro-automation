@@ -2,12 +2,5 @@
   "closed_campaigns": [
     "fb1afaae-65b7-490f-bbed-c48ac6382486"
   ],
-  "clips": [
-    {
-      "campaign_id": "app",
-      "clip_id": "1QiA0tgfStCyLywNdMveUx_RQdt3epKR4",
-      "url": "https://drive.google.com/file/d/1QiA0tgfStCyLywNdMveUx_RQdt3epKR4/view",
-      "kind": "drive_file"
-    }
-  ]
+  "clips": []
 }
