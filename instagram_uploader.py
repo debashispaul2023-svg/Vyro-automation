@@ -90,6 +90,7 @@ def _create_container(ig_business_id: str, access_token: str, video_url: str, ca
             "media_type": "REELS",
             "video_url": video_url,
             "caption": caption,
+            "share_to_feed": "true",
             "access_token": access_token,
         },
         timeout=30,
@@ -151,3 +152,32 @@ if __name__ == "__main__":
     tag = f"clip-{int(time.time())}"
     media_id = upload_reel(sys.argv[1], sys.argv[2], tag)
     print(f"Published Instagram Reel: {media_id}")
+
+
+def fetch_reel_permalink(media_id: str) -> str:
+    """Instagram Login tokens work on graph.instagram.com, not graph.facebook.com."""
+    token = os.environ.get("IG_ACCESS_TOKEN") or ""
+    if not media_id or not token:
+        return ""
+    for base in (
+        f"{GRAPH_API_BASE}/{API_VERSION}",
+        "https://graph.instagram.com/v21.0",
+        "https://graph.facebook.com/v21.0",
+    ):
+        try:
+            resp = requests.get(
+                f"{base}/{media_id}",
+                params={"fields": "permalink,shortcode", "access_token": token},
+                timeout=30,
+            )
+            data = resp.json() if resp.content else {}
+            link = (data.get("permalink") or "").strip()
+            if link.startswith("http"):
+                return link
+            code = (data.get("shortcode") or "").strip()
+            if code:
+                return f"https://www.instagram.com/reel/{code}/"
+            print(f"[ig] permalink miss {base}: {data}")
+        except Exception as exc:
+            print(f"[ig] permalink {base} failed: {exc}")
+    return ""

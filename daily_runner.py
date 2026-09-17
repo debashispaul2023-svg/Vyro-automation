@@ -47,7 +47,7 @@ from google_doc_reader import (
     list_content_folder_clips,
     resolve_and_download_footage,
 )
-from instagram_uploader import InstagramUploadError, upload_reel
+from instagram_uploader import InstagramUploadError, fetch_reel_permalink, upload_reel
 from metadata import MetadataError, VideoMetadata, generate_metadata
 from renderer import RenderError, render_short
 from tts_engine import generate_voiceover, phrases_from_words
@@ -616,25 +616,13 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
 
 
 def _instagram_permalink(media_id: str) -> str:
-    """Turn Graph media id into a public Reel URL for Whop submit."""
-    token = (os.environ.get("IG_ACCESS_TOKEN") or "").strip()
-    if not media_id or not token:
-        return ""
-    try:
-        resp = requests.get(
-            f"https://graph.facebook.com/v21.0/{media_id}",
-            params={"fields": "permalink", "access_token": token},
-            timeout=30,
-        )
-        data = resp.json() if resp.content else {}
-        link = (data.get("permalink") or "").strip()
-        if link.startswith("http"):
-            print(f"[ig] permalink {link}")
-            return link
-        print(f"[ig] no permalink in Graph response: {data}")
-    except Exception as exc:
-        print(f"[ig] permalink lookup failed: {exc}")
-    return ""
+    """Public Reel URL. Uses Instagram Graph (same token as upload)."""
+    link = fetch_reel_permalink(media_id)
+    if link:
+        print(f"[ig] permalink {link}")
+    else:
+        print("[ig] no permalink — check IG_ACCESS_TOKEN is a current Instagram Login token")
+    return link
 
 
 def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
