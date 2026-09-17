@@ -421,27 +421,26 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         pass
     end_at = max(0.0, dur - 3.2)
     lines = [
-        (0.0, min(4.0, dur), "I found one of the weirdest Roblox games"),
-        (4.0, min(9.0, dur), "Catch strange fish then fight to survive"),
-        (9.0, min(14.0, dur), "Upgrade your gear and keep catching fish"),
-        (14.0, min(end_at, dur), "Stronger bosses on every island"),
-        (end_at, dur, "Save this. Hit follow."),
-        (end_at, dur, "Game is called How to Fisch on Roblox"),
+        (0.0, min(3.2, dur), "I found the WEIRDEST Roblox game", "yellow", "black"),
+        (3.2, min(8.0, dur), "Catch fish. Then FIGHT.", "0x00F5FF", "black"),
+        (8.0, min(13.0, dur), "Upgrade gear. Get stronger.", "0xFF3D8A", "white"),
+        (13.0, min(end_at, dur), "Bosses on every island", "0xB8FF00", "black"),
+        (end_at, dur, "Save this. Hit follow.", "yellow", "black"),
+        (end_at, dur, "Game is called How to Fisch", "yellow", "black"),
     ]
     parts = []
-    for i, (a, b, txt) in enumerate(lines):
+    for i, (a, b, txt, box, ink) in enumerate(lines):
         if b <= a:
             continue
         safe = txt.replace("\\", " ").replace("'", "").replace(":", " -")
-        y = "h-220" if i == len(lines) - 1 else "h-280"
-        col = "yellow" if i >= len(lines) - 2 else "white"
-        size = 40 if i >= len(lines) - 2 else 44
+        y = "h-200" if i == len(lines) - 1 else "h-340"
         parts.append(
-            f"drawtext=text='{safe}':fontcolor={col}:fontsize={size}:"
-            f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={y}:"
-            f"enable='between(t,{a:.2f},{b:.2f})'"
+            f"drawtext=text='{safe}':fontcolor={ink}:fontsize=52:"
+            f"box=1:boxcolor={box}@0.92:boxborderw=22:"
+            f"x=(w-text_w)/2:y={y}:enable='between(t,{a:.2f},{b:.2f})'"
         )
     draw = ",".join(parts)
+    print("[caption] color boxes burned (yellow/cyan/pink/lime)")
     en = f"gte(t,{end_at:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
