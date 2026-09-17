@@ -62,7 +62,7 @@ WHOP_DISCOVER_URLS = (
     "https://whop.com/discover",
     "https://whop.com/discover/content-rewards/",
 )
-DEFAULT_TIMEOUT_MS = 20000
+DEFAULT_TIMEOUT_MS = 45000
 COOKIE_DOMAIN = ".whop.com"
 
 
@@ -129,8 +129,16 @@ def _settle(page: Page) -> None:
         pass
 
 
+def _safe_goto(page: Page, target_url: str) -> None:
+    page.goto(target_url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=8000)
+    except PlaywrightTimeoutError:
+        pass
+
+
 def _ensure_logged_in(page: Page, target_url: str) -> None:
-    page.goto(target_url, timeout=DEFAULT_TIMEOUT_MS)
+    _safe_goto(page, target_url)
     _settle(page)
 
     title = (page.title() or "").lower()
@@ -530,7 +538,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     )
 
                 try:
-                    page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS)
+                    page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
                     _settle(page)
                     frame = _discover_root(page)
                     card_texts = frame.get_by_text(rate)
@@ -553,6 +561,42 @@ def _close_any_modal(page: Page) -> None:
         pass
 
 
+
+def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
+    """When Whop SPA does not finish loading, still run off the JSON + Drive folder."""
+    source = (entry.get("source_clip_url") or "").strip()
+    name = (entry.get("name_hint") or "configured-campaign").strip()
+    if not source and not name:
+        return None
+    url = entry.get("url") or ""
+    cid = "configured"
+    m = re.search(r"campaigns/([0-9a-fA-F-]{16,})", url)
+    if m:
+        cid = m.group(1)
+    elif "fisch" in name.lower():
+        cid = "how-to-fisch"
+    rules = name
+    if "fisch" in name.lower():
+        rules = (
+            f"{name}\n"
+            "The name How to Fisch must be spoken somewhere in the video.\n"
+            "The How to Fisch game icon must be visibly shown at the end of the video.\n"
+            "A clear CTA must be included. Example: Game is called How to Fisch on Roblox.\n"
+            "Low-quality poorly presented videos will not be accepted.\n"
+            "Only Roblox-dedicated accounts may upload. English-based."
+        )
+    print(f"[whop_client] config fallback campaign={cid} source={source[:80]}")
+    return WhopCampaign(
+        campaign_id=cid,
+        name=name,
+        requirements_text=rules,
+        source_clip_url=source,
+        submit_page_url=url,
+        reference_doc_url=entry.get("reference_doc_url"),
+        platforms=["instagram", "youtube", "tiktok"],
+    )
+
+
 def check_configured_campaigns() -> Optional[WhopCampaign]:
     configured = _load_configured_campaigns()
     if not configured:
@@ -566,8 +610,14 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
             for entry in configured:
                 url = entry["url"]
                 name_hint = entry.get("name_hint", "")
-                _ensure_logged_in(page, url)
-                campaign = _extract_campaign_details(page, url, name_hint=name_hint)
+                try:
+                    _ensure_logged_in(page, url)
+                    campaign = _extract_campaign_details(page, url, name_hint=name_hint)
+                except Exception as exc:
+                    print(f"[whop_client] page open failed ({exc}); using config fallback if possible")
+                    campaign = None
+                if campaign is None:
+                    campaign = _campaign_from_config(entry)
                 if campaign is not None:
                     extra = (entry.get("source_clip_url") or "").strip()
                     if extra:
