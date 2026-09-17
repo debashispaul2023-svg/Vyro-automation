@@ -309,41 +309,39 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
 
 
 def _tts_spoken(text: str, dest_wav: str) -> bool:
-    """ElevenLabs with key rotation, else espeak fallback."""
+    """ElevenLabs if key exists, else espeak."""
     if not (text or "").strip():
         return False
-
-    keys_env = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
     voice = (os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM").strip()
-
-    if keys_env:
-        # Split by comma and remove empty spaces
-        keys = [k.strip() for k in keys_env.split(",") if k.strip()]
-        total_keys = len(keys)
-
-        for i, key in enumerate(keys, start=1):
-            short_key = key[-4:] if len(key) > 4 else key
-            print(f"[+] Trying ElevenLabs key #{i}/{total_keys} (...{short_key})...")
-            try:
-                resp = requests.post(
-                    f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
-                    headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
-                    json={"text": text.strip(), "model_id": "eleven_monolingual_v1"},
-                    timeout=60,
-                )
-                if resp.status_code == 200 and resp.content:
-                    mp3 = dest_wav.replace(".wav", ".mp3")
-                    with open(mp3, "wb") as f:
-                        f.write(resp.content)
-                    subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
-                    print(f"[voice] Voiceover generated with ElevenLabs key #{i}")
-                    return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
-                else:
-                    print(f"[!] ElevenLabs key #{i} failed (HTTP {resp.status_code}: {resp.text[:120]}); trying the next key...")
-            except Exception as exc:
-                print(f"[!] ElevenLabs key #{i} error: {exc}")
-
-    # Fallback to espeak
+    if key:
+        try:
+            resp = requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
+                headers={"xi-api-key": key, "accept": "audio/mpeg", "content-type": "application/json"},
+                json={
+                    "text": text.strip(),
+                    "model_id": "eleven_multilingual_v2",
+                    "voice_settings": {
+                        "stability": 0.35,
+                        "similarity_boost": 0.85,
+                        "style": 0.45,
+                        "use_speaker_boost": True,
+                    },
+                },
+                timeout=60,
+            )
+            if resp.status_code == 200 and resp.content:
+                mp3 = dest_wav.replace(".wav", ".mp3")
+                PathWrite = dest_wav
+                with open(mp3, "wb") as f:
+                    f.write(resp.content)
+                subprocess.run(["ffmpeg", "-y", "-i", mp3, dest_wav], check=True, capture_output=True, timeout=30)
+                print("[voice] ElevenLabs TTS ok")
+                return os.path.isfile(dest_wav) and os.path.getsize(dest_wav) > 200
+            print(f"[voice] ElevenLabs HTTP {resp.status_code}: {resp.text[:180]}")
+        except Exception as exc:
+            print(f"[voice] ElevenLabs failed: {exc}")
     for cmd in (["espeak", "-s", "140", "-w", dest_wav, text], ["espeak-ng", "-s", "140", "-w", dest_wav, text]):
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=20)
@@ -411,23 +409,40 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     tts = "output/fisch_tts.wav"
     os.makedirs("output", exist_ok=True)
     tts_ok = bool(spoken) and _tts_spoken(spoken, tts)
-    end_at = 8.0
+    dur = 24.0
     try:
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", video_path],
             capture_output=True, text=True, timeout=20,
         )
-        end_at = max(0.0, float((probe.stdout or "0").strip() or 0) - 3.0)
+        dur = float((probe.stdout or "0").strip() or 0) or 24.0
     except Exception:
         pass
+    end_at = max(0.0, dur - 3.2)
+    lines = [
+        (0.0, min(4.0, dur), "I found one of the weirdest Roblox games"),
+        (4.0, min(9.0, dur), "Catch strange fish then fight to survive"),
+        (9.0, min(14.0, dur), "Upgrade your gear and keep catching fish"),
+        (14.0, min(end_at, dur), "Stronger bosses on every island"),
+        (end_at, dur, "Save this. Hit follow."),
+        (end_at, dur, "Game is called How to Fisch on Roblox"),
+    ]
+    parts = []
+    for i, (a, b, txt) in enumerate(lines):
+        if b <= a:
+            continue
+        safe = txt.replace("\\", " ").replace("'", "").replace(":", " -")
+        y = "h-220" if i == len(lines) - 1 else "h-280"
+        col = "yellow" if i >= len(lines) - 2 else "white"
+        size = 40 if i >= len(lines) - 2 else 44
+        parts.append(
+            f"drawtext=text='{safe}':fontcolor={col}:fontsize={size}:"
+            f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={y}:"
+            f"enable='between(t,{a:.2f},{b:.2f})'"
+        )
+    draw = ",".join(parts)
     en = f"gte(t,{end_at:.2f})"
-    draw = (
-        "drawtext=text='HOW TO FISCH':fontcolor=white:fontsize=72:"
-        f"borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-280:enable='{en}',"
-        "drawtext=text='Game is called How to Fisch on Roblox':fontcolor=yellow:"
-        f"fontsize=36:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-180:enable='{en}'"
-    )
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
         draw = (
@@ -766,11 +781,12 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
 
     try:
         _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
+        cap = "" if "fisch" in (campaign.name or "").lower() else hook
         render_short(
             source_path=SOURCE_CLIP_PATH,
             output_path=OUTPUT_PATH,
             req=req,
-            fallback_caption_text=hook,
+            fallback_caption_text=cap or None,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
         _apply_requirement_tools(campaign, OUTPUT_PATH)
