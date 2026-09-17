@@ -714,11 +714,23 @@ def _click_submit_clip(frame, *, last: bool = False) -> None:
 
 
 def _clean_public_video_url(video_url: str) -> str:
-    """Drop tracking query like ?stkn= so Whop sees a normal permalink."""
+    """Keep watch?v= / reel id. Drop only tracking junk like stkn."""
     raw = (video_url or "").strip()
+    low = raw.lower()
+    if "youtube.com/watch" in low:
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(raw).query)
+        vid = (q.get("v") or [None])[0]
+        if vid:
+            return f"https://www.youtube.com/watch?v={vid}"
+        return raw
+    if "youtu.be/" in low:
+        return raw.split("?")[0]
+    if "instagram.com/reel/" in low:
+        return raw.split("?")[0].rstrip("/") + "/"
     if "?" in raw:
         raw = raw.split("?", 1)[0]
-    return raw.rstrip("/") + ("/" if "instagram.com/reel/" in raw.lower() else "")
+    return raw
 
 
 def _submission_looks_accepted(text: str) -> bool:

@@ -198,9 +198,17 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         if not _clip_already_used(log, campaign.campaign_id, c["clip_id"])
         and c.get("kind") in ("drive_file", "direct")
     ]
-    pack = [first]
+    def _ms(c):
+        try:
+            return float(c.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    unused = [c for c in unused if _ms(c) >= 10000]
+    pack = [first] if _ms(first) >= 10000 or not unused else []
+    if not pack and unused:
+        pack = [unused[0]]
     for c in unused:
-        if c["clip_id"] == first["clip_id"]:
+        if c["clip_id"] == pack[0]["clip_id"]:
             continue
         pack.append(c)
         if len(pack) >= want:
@@ -391,7 +399,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         return
     if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
         return
-    spoken = plan.get("speak_text") or (
+    spoken = (
         "In this Roblox game you catch strange fish, upgrade your gear, and fight. "
         "The game is called How to Fisch."
     )
@@ -401,20 +409,29 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     tts = "output/fisch_tts.wav"
     os.makedirs("output", exist_ok=True)
     tts_ok = bool(spoken) and _tts_spoken(spoken, tts)
+    end_at = 8.0
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=20,
+        )
+        end_at = max(0.0, float((probe.stdout or "0").strip() or 0) - 3.0)
+    except Exception:
+        pass
+    en = f"gte(t,{end_at:.2f})"
     draw = (
         "drawtext=text='HOW TO FISCH':fontcolor=white:fontsize=72:"
-        "borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-280:"
-        "enable='gte(t,8)',"
+        f"borderw=4:bordercolor=black:x=(w-text_w)/2:y=h-280:enable='{en}',"
         "drawtext=text='Game is called How to Fisch on Roblox':fontcolor=yellow:"
-        "fontsize=36:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-180:"
-        "enable='gte(t,8)'"
+        f"fontsize=36:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-180:enable='{en}'"
     )
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
         draw = (
             f"[0:v]{draw}[base];"
             f"[1:v]scale=280:280:force_original_aspect_ratio=decrease[ic];"
-            f"[base][ic]overlay=(W-w)/2:H-h-320:enable='gte(t,8)'[v]"
+            f"[base][ic]overlay=(W-w)/2:H-h-320:enable='{en}'[v]"
         )
         print(f"[fisch] overlay icon {icon}")
     ff = ["ffmpeg", "-y", "-i", video_path]
