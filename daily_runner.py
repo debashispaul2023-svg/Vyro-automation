@@ -101,6 +101,9 @@ def _save_clip_log(log: dict) -> None:
 
 def _clip_already_used(log: dict, campaign_id: str, clip_id: str) -> bool:
     """Same file is allowed again only under a different (new) campaign_id."""
+    reuse = (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes")
+    if reuse:
+        return False
     for row in log.get("clips") or []:
         if row.get("campaign_id") == campaign_id and row.get("clip_id") == clip_id:
             return True
@@ -840,6 +843,8 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
 
 def main() -> int:
     clip_log = _load_clip_log()
+    if (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes"):
+        print("[clips] CLIP_REUSE=1 — old folder clips can be picked again")
 
     platform, campaign = _find_campaign()
 
