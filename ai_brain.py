@@ -49,10 +49,16 @@ class AIBrainError(Exception):
     """Raised when a Gemini call fails and there is no safe fallback."""
 
 
-def _model() -> "genai.GenerativeModel":
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise AIBrainError("GEMINI_API_KEY environment variable is not set.")
+def _gemini_keys() -> list[str]:
+    blob = (os.environ.get("GEMINI_API_KEYS") or "").strip()
+    keys = [k.strip() for k in blob.split(",") if k.strip()]
+    one = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if one and one not in keys:
+        keys.insert(0, one)
+    return keys
+
+
+def _model(api_key: str) -> "genai.GenerativeModel":
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(MODEL_NAME)
 
@@ -61,17 +67,40 @@ def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
     """Sends a prompt to Gemini requesting a strict JSON response, and
     parses it. Raises AIBrainError on any failure (network, bad JSON,
     empty response, etc) so callers can fall back to non-AI logic."""
+    keys = _gemini_keys()
+    if not keys:
+        raise AIBrainError("GEMINI_API_KEY / GEMINI_API_KEYS not set.")
+    last_exc: Exception | None = None
+    text = ""
     try:
-        model = _model()
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json",
-                max_output_tokens=max_output_tokens,
-                temperature=0.4,
-            ),
-        )
-        text = response.text
+        for i, key in enumerate(keys, start=1):
+            try:
+                model = _model(key)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        response_mime_type="application/json",
+                        max_output_tokens=max_output_tokens,
+                        temperature=0.4,
+                    ),
+                )
+                text = response.text
+                if i > 1:
+                    print(f"[gemini] used key #{i}")
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                msg = str(exc)
+                print(f"[gemini] key #{i}/{len(keys)} failed: {msg[:160]}")
+                if "429" not in msg and "quota" not in msg.lower() and i < len(keys):
+                    # still try next key; quota is the main reason to rotate
+                    continue
+                if i < len(keys):
+                    continue
+        else:
+            raise AIBrainError(f"Gemini API call failed: {last_exc}")
+        if not text and last_exc:
+            raise AIBrainError(f"Gemini API call failed: {last_exc}") from last_exc
     except AIBrainError:
         raise
     except Exception as exc:  # noqa: BLE001
