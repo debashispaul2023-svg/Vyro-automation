@@ -314,7 +314,7 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
             except Exception as exc:
                 print(f"[whop_client debug] Could not click the '{name_hint}' card: {exc}")
 
-    if looks_like_list or "submit clip" not in body_text.lower():
+    if (looks_like_list or "submit clip" not in body_text.lower()) and not name_hint:
         try:
             print("[whop_client debug] Still no 'Submit clip' — trying to click the first campaign card in the list.")
             candidate = frame.get_by_role("link").filter(
@@ -490,7 +490,8 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
         page = context.new_page()
         try:
             landed = False
-            for start_url in WHOP_DISCOVER_URLS:
+            board = [BLOXCLIPS_APP, BLOXCLIPS_HOME] + list(WHOP_DISCOVER_URLS)
+            for start_url in board:
                 try:
                     print(f"[whop_client debug] Opening Discover {start_url}")
                     _ensure_logged_in(page, start_url)
@@ -505,6 +506,36 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 return newly_joined
 
             frame = _discover_root(page)
+            named = ("Steal A Seed", "Tongue Escape", "World Athletics", "How to Fisch")
+            for title in named:
+                try:
+                    print(f"[whop] board click '{title}'")
+                    frame.get_by_text(re.compile(re.escape(title), re.I)).first.click(timeout=4000, force=True)
+                    page.wait_for_timeout(1500)
+                    frame = _discover_root(page)
+                    body = ""
+                    try:
+                        body = frame.inner_text("body")
+                    except Exception:
+                        body = page.inner_text("body")
+                    if "forgegui" in body.lower():
+                        print("[whop] opened ForgeGUI by mistake — skip")
+                        _close_any_modal(page)
+                        continue
+                    joined = False
+                    for root in (frame, page):
+                        try:
+                            root.get_by_role("button", name=re.compile("join campaign", re.I)).first.click(timeout=2500)
+                            joined = True
+                            print(f"[whop] joined '{title}'")
+                            break
+                        except Exception:
+                            continue
+                    if joined:
+                        newly_joined.append(page.url)
+                    _close_any_modal(page)
+                except Exception as exc:
+                    print(f"[whop] could not open '{title}': {exc}")
             rate = re.compile(r"\$[\d.]+\s*/\s*1k", re.I)
             card_texts = frame.get_by_text(rate)
             try:
@@ -669,6 +700,24 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "Codes: WELCOME1, BONUS500, FREEBOOST.\n"
             "https://www.roblox.com/games/122245938604556/1-Tongue-Escape"
         )
+    elif "seed" in name.lower():
+        cid = "steal-a-seed"
+        rules = (
+            f"{name}\n"
+            "The name Steal A Seed must be spoken somewhere in the video.\n"
+            "The Steal A Seed game icon must be visibly shown.\n"
+            "A clear CTA must be included. Example: Game is called Steal A Seed on Roblox.\n"
+            "Only Roblox accounts. English-based."
+        )
+    elif "athletics" in name.lower():
+        cid = "world-athletics"
+        rules = (
+            f"{name}\n"
+            "The name World Athletics must be spoken somewhere in the video.\n"
+            "Show the World Athletics game title or icon.\n"
+            "A clear CTA must be included. Example: Game is called World Athletics on Roblox.\n"
+            "Only Roblox accounts. English-based."
+        )
     print(f"[whop_client] config fallback campaign={cid} source={source[:80]}")
     return WhopCampaign(
         campaign_id=cid,
@@ -701,6 +750,7 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
+            fisch_last = None
             for entry in configured:
                 url = entry["url"]
                 name_hint = entry.get("name_hint", "")
@@ -715,12 +765,22 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                     campaign = None
                 if campaign is None:
                     campaign = _campaign_from_config(entry)
-                if campaign is not None:
-                    extra = (entry.get("source_clip_url") or "").strip()
-                    if extra:
-                        campaign.source_clip_url = extra
-                        print(f"[whop_client debug] Using configured source clip: {extra}")
-                    return campaign
+                if campaign is None:
+                    continue
+                extra = (entry.get("source_clip_url") or "").strip()
+                if extra:
+                    campaign.source_clip_url = extra
+                    print(f"[whop_client debug] Using configured source clip: {extra}")
+                blob = f"{campaign.name} {name_hint}".lower()
+                if "fisch" in blob:
+                    print("[whop] How to Fisch saved as last resort — trying newer BloxClips campaigns first")
+                    fisch_last = campaign
+                    continue
+                print(f"[whop] selected board campaign '{campaign.name}'")
+                return campaign
+            if fisch_last is not None:
+                print("[whop] no newer campaign usable — falling back to How to Fisch")
+                return fisch_last
             return None
         finally:
             browser.close()

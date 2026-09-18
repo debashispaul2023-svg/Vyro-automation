@@ -6,33 +6,32 @@
     "forgegui clipping"
   ],
   "allow_name_markers": [
-    "how to fisch",
     "steal a seed",
     "tongue escape",
-    "world athletics"
+    "world athletics",
+    "how to fisch"
   ],
   "joined_campaigns": [
-    {
-      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "How to Fisch",
-      "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
-      "example_upload": "https://www.youtube.com/shorts/evmQcutp-ug",
-      "source_clip_url": "https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
-    },
-    {
-      "url": "https://contentrewards.com/discover/ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
-      "name_hint": "+1 Tongue Escape",
-      "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
-      "example_upload": "https://www.youtube.com/shorts/evmQcutp-ug",
-      "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing"
-    },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "Steal A Seed"
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "+1 Tongue Escape",
+      "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
+      "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing"
+    },
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "World Athletics"
+    },
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "How to Fisch",
+      "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
+      "example_upload": "https://www.youtube.com/shorts/evmQcutp-ug",
+      "source_clip_url": "https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
     }
   ]
 }
