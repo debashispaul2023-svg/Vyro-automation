@@ -306,6 +306,10 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         order = {n.lower(): i for i, n in enumerate(ranked)}
         pool.sort(key=lambda c: order.get((c.get("name") or "").lower(), 999))
         print(f"[clips] AI order starts with {pool[0].get('name')}")
+    if len(pool) > 1:
+        shift = date.today().toordinal() % len(pool)
+        pool = pool[shift:] + pool[:shift]
+        print(f"[clips] day-rotate start {pool[0].get('name')} (shift={shift})")
     clip = pool[0]
     print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
     return clip
