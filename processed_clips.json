@@ -2,5 +2,30 @@
   "closed_campaigns": [
     "fb1afaae-65b7-490f-bbed-c48ac6382486"
   ],
-  "clips": []
+  "clips": [
+    {
+      "campaign_id": "how-to-fisch",
+      "clip_id": "110qCVsVOOoZYEgjaP39_Gg60jmF0pARs",
+      "url": "https://drive.google.com/file/d/110qCVsVOOoZYEgjaP39_Gg60jmF0pARs/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "how-to-fisch",
+      "clip_id": "1epwfwyNXLHlFYPsvb886iae2auWLuxc2",
+      "url": "https://drive.google.com/file/d/1epwfwyNXLHlFYPsvb886iae2auWLuxc2/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "how-to-fisch",
+      "clip_id": "1UOqSYCk3FhMxLKZU0ESgoiCXRre4UxC8",
+      "url": "https://drive.google.com/file/d/1UOqSYCk3FhMxLKZU0ESgoiCXRre4UxC8/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "how-to-fisch",
+      "clip_id": "1nQ-AMRYs1xV34P5_N_yFReSAlt6kOTCA",
+      "url": "https://drive.google.com/file/d/1nQ-AMRYs1xV34P5_N_yFReSAlt6kOTCA/view",
+      "kind": "drive_file"
+    }
+  ]
 }
