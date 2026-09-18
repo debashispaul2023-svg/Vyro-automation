@@ -100,14 +100,23 @@ def _save_clip_log(log: dict) -> None:
 
 
 def _clip_already_used(log: dict, campaign_id: str, clip_id: str) -> bool:
-    """Same file is allowed again only under a different (new) campaign_id."""
+    """Skip a file if this Drive id was already rendered, any campaign name."""
     reuse = (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes")
     if reuse:
         return False
+    cid = (clip_id or "").strip()
+    if not cid:
+        return False
     for row in log.get("clips") or []:
-        if row.get("campaign_id") == campaign_id and row.get("clip_id") == clip_id:
+        if (row.get("clip_id") or "").strip() == cid:
             return True
     return False
+
+
+def _clip_sort_key(clip: dict) -> tuple:
+    name = clip.get("name") or ""
+    m = re.search(r"(\d+)", name)
+    return (int(m.group(1)) if m else 10_000, name.lower())
 
 
 def _download_source_clip(url: str, dest_path: str) -> None:
@@ -208,15 +217,18 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         except (TypeError, ValueError):
             return 0.0
     unused = [c for c in unused if _ms(c) >= 10000]
-    pack = [first] if _ms(first) >= 10000 or not unused else []
-    if not pack and unused:
-        pack = [unused[0]]
+    unused.sort(key=_clip_sort_key)
+    pack = []
+    if first and any(c["clip_id"] == first["clip_id"] for c in unused):
+        pack.append(first)
     for c in unused:
-        if c["clip_id"] == pack[0]["clip_id"]:
+        if pack and c["clip_id"] == pack[0]["clip_id"]:
             continue
         pack.append(c)
         if len(pack) >= want:
             break
+    if not pack and unused:
+        pack = unused[:want]
     print(f"[clips] merge pack ({len(pack)}): " + ", ".join(x.get("name") or x["clip_id"] for x in pack))
     return pack
 
@@ -292,24 +304,8 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         pool = long_enough
     else:
         print("[clips] no 10s+ clip left; using remaining pool")
-    names = [c.get("name") or "" for c in pool]
-    ranked = []
-    try:
-        ranked = ai_rank_clip_names(
-            names,
-            (campaign.requirements_text or "")
-            + " Prefer clips that show catching fish, upgrading gear, or fighting. Skip stills.",
-        )
-    except Exception as exc:
-        print(f"[ai] rank failed: {exc}")
-    if ranked:
-        order = {n.lower(): i for i, n in enumerate(ranked)}
-        pool.sort(key=lambda c: order.get((c.get("name") or "").lower(), 999))
-        print(f"[clips] AI order starts with {pool[0].get('name')}")
-    if len(pool) > 1:
-        shift = date.today().toordinal() % len(pool)
-        pool = pool[shift:] + pool[:shift]
-        print(f"[clips] day-rotate start {pool[0].get('name')} (shift={shift})")
+    pool.sort(key=_clip_sort_key)
+    print(f"[clips] next unused by number: {pool[0].get('name')} ({len(pool)} left)")
     clip = pool[0]
     print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
     return clip
@@ -380,10 +376,20 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         return
     if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
         return
-    spoken = (
-        "In this Roblox game you catch strange fish, upgrade your gear, and fight. "
-        "The game is called How to Fisch."
-    )
+    scripts = [
+        "I found one of the weirdest Roblox games. You catch strange fish then fight to survive. The game is called How to Fisch.",
+        "This new Roblox game is actually way more fun than it looks. Catch fish, upgrade your gear, and fight. The game is called How to Fisch.",
+        "If you want a new Roblox game, try this. Catch fish to upgrade gear and fight bosses. The game is called How to Fisch.",
+        "In this Roblox game you have to catch strange fish then fight to survive. The game is called How to Fisch.",
+        "This is a fishing game and an FPS on Roblox. Keep catching fish, upgrade, and fight. The game is called How to Fisch.",
+    ]
+    used_n = 0
+    try:
+        used_n = len((_load_clip_log().get("clips") or []))
+    except Exception:
+        used_n = 0
+    spoken = scripts[used_n % len(scripts)]
+    print(f"[voice] script variant {used_n % len(scripts) + 1}/{len(scripts)}")
     _tts_spoken.last_words = []
     if plan and not plan.get("need_spoken_voice"):
         spoken = ""
@@ -671,7 +677,15 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
     if "fisch" in blob or "how to fisch" in blob:
         print("[meta] Fisch lock — official campaign wording only")
         return VideoMetadata(
-            title="THIS ROBLOX GAME IS SO PEAK — How to Fisch #roblox #shorts",
+            title=(
+                [
+                    "THIS ROBLOX GAME IS SO PEAK — How to Fisch #roblox #shorts",
+                    "I found the WEIRDEST Roblox game — How to Fisch #shorts",
+                    "Catch fish. Then FIGHT. How to Fisch #roblox #shorts",
+                    "This Roblox fishing game slaps — How to Fisch #shorts",
+                    "FPS plus fishing on Roblox — How to Fisch #shorts",
+                ][len((_load_clip_log().get("clips") or [])) % 5]
+            ),
             description=(
                 "In this Roblox game you catch fish, upgrade gear, and fight bosses.\n"
                 "Game is called How to Fisch on Roblox.\n"
