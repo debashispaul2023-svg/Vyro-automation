@@ -2,7 +2,10 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    # 3x daily, US Eastern (EDT = UTC-4)
+    - cron: "0 15 * * *"  # 11:00 AM ET — lunch Reels
+    - cron: "0 20 * * *"  # 4:00 PM ET — after-school gaming
+    - cron: "0 23 * * *"  # 7:00 PM ET — prime evening Reels/Shorts
   workflow_dispatch: {}
 
 permissions:
@@ -101,6 +104,7 @@ jobs:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          WHOP_ENABLE_DISCOVER: "1"
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact
