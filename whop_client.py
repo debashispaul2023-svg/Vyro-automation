@@ -575,6 +575,8 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
         cid = m.group(1)
     elif "fisch" in name.lower():
         cid = "how-to-fisch"
+    elif "tongue" in name.lower():
+        cid = "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a"
     rules = name
     if "fisch" in name.lower():
         rules = (
@@ -584,6 +586,17 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "A clear CTA must be included. Example: Game is called How to Fisch on Roblox.\n"
             "Low-quality poorly presented videos will not be accepted.\n"
             "Only Roblox-dedicated accounts may upload. English-based."
+        )
+    elif "tongue" in name.lower():
+        rules = (
+            f"{name}\n"
+            "The name +1 Tongue Escape must be spoken somewhere in the video.\n"
+            "The Tongue Escape game title or icon must be visibly shown somewhere in the video.\n"
+            "A clear CTA must be included. Example: Game is called +1 Tongue Escape on Roblox.\n"
+            "Put the game link in your bio while participating.\n"
+            "Only Roblox accounts may upload. English-based. 1% engagement minimum.\n"
+            "Codes: WELCOME1, BONUS500, FREEBOOST.\n"
+            "https://www.roblox.com/games/122245938604556/1-Tongue-Escape"
         )
     print(f"[whop_client] config fallback campaign={cid} source={source[:80]}")
     return WhopCampaign(
