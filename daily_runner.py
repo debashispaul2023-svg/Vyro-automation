@@ -346,6 +346,12 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         except (TypeError, ValueError):
             ms = 0
         if ms >= 10000:
+            try:
+                sz = int(c.get("size_bytes") or c.get("size") or 0)
+            except (TypeError, ValueError):
+                sz = 0
+            if sz and sz > 90_000_000:
+                continue
             long_enough.append(c)
     if long_enough:
         print(f"[clips] dropped {len(pool) - len(long_enough)} clips under 10s")
@@ -396,20 +402,58 @@ def _quality_boost(video_path: str) -> None:
 
 
 
+def _lock_plan_from_rules(rules: str, plan: dict | None) -> dict:
+    """ready_to_upload=false means GENERATE with tools, not skip."""
+    low = (rules or "").lower()
+    out = dict(plan or {})
+    out["ready_to_upload"] = False
+    if any(w in low for w in ("spoken", "must be spoken", "voice", "say the name")):
+        out["need_spoken_voice"] = True
+    if any(w in low for w in ("icon", "visibly shown", "game title", "shown somewhere")):
+        out["need_end_icon"] = True
+    out["need_captions"] = True
+    if any(w in low for w in ("low-quality", "quality", "poorly presented")):
+        out["need_quality_boost"] = True
+    if "tongue" in low:
+        out["speak_text"] = out.get("speak_text") or "+1 Tongue Escape"
+        out["cta_text"] = out.get("cta_text") or "Game is called +1 Tongue Escape on Roblox"
+        out["end_title"] = out.get("end_title") or "+1 Tongue Escape"
+    if "fisch" in low:
+        out["speak_text"] = out.get("speak_text") or "How to Fisch"
+        out["cta_text"] = out.get("cta_text") or "Game is called How to Fisch on Roblox"
+        out["end_title"] = out.get("end_title") or "HOW TO FISCH"
+    if "steal" in low and "seed" in low:
+        out["speak_text"] = out.get("speak_text") or "Steal A Seed"
+        out["cta_text"] = out.get("cta_text") or "Game is called Steal A Seed on Roblox"
+    if "athletics" in low:
+        out["speak_text"] = out.get("speak_text") or "World Athletics"
+        out["cta_text"] = out.get("cta_text") or "Game is called World Athletics on Roblox"
+    return out
+
+
 def _apply_requirement_tools(campaign: Campaign, video_path: str) -> None:
-    """Only tools the rules ask for. Ready-to-upload = no extra edit."""
+    """Read rules, arm tools, then generate. False ready_to_upload = edit required."""
     rules = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
-    plan = ai_plan_edit_tools(rules)
-    print(f"[tools] {plan}")
-    if plan.get("ready_to_upload"):
-        print("[tools] rules say ready-to-upload — skip voice/captions/icon/quality")
-        return
+    print("[req] ----- campaign rules -----")
+    print((rules or "")[:900])
+    print("[req] ----- end rules -----")
+    try:
+        plan = ai_plan_edit_tools(rules)
+    except Exception as exc:
+        print(f"[tools] AI plan failed ({exc}) — using rules lock")
+        plan = {}
+    plan = _lock_plan_from_rules(rules, plan)
+    print(
+        "[tools] armed "
+        f"voice={plan.get('need_spoken_voice')} "
+        f"captions={plan.get('need_captions')} "
+        f"icon={plan.get('need_end_icon')} "
+        f"quality={plan.get('need_quality_boost')} "
+        f"speak={plan.get('speak_text')!r} "
+        f"cta={plan.get('cta_text')!r}"
+    )
     if plan.get("need_quality_boost"):
         _quality_boost(video_path)
-    if not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
-        print("[tools] no voice/caption/icon requested")
-        return
-    # pass plan into pack via env-like globals
     campaign._edit_plan = plan  # type: ignore[attr-defined]
     _apply_campaign_pack(campaign, video_path)
 
@@ -420,17 +464,29 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     plan = getattr(campaign, "_edit_plan", None) or {}
     if plan.get("ready_to_upload"):
         return
-    if "fisch" not in blob and "how to fisch" not in blob:
-        return
     if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
         return
-    scripts = [
-        "I found one of the weirdest Roblox games. You catch strange fish then fight to survive. The game is called How to Fisch.",
-        "This new Roblox game is actually way more fun than it looks. Catch fish, upgrade your gear, and fight. The game is called How to Fisch.",
-        "If you want a new Roblox game, try this. Catch fish to upgrade gear and fight bosses. The game is called How to Fisch.",
-        "In this Roblox game you have to catch strange fish then fight to survive. The game is called How to Fisch.",
-        "This is a fishing game and an FPS on Roblox. Keep catching fish, upgrade, and fight. The game is called How to Fisch.",
-    ]
+    game = (plan.get("speak_text") or campaign.name or "this Roblox game").strip()
+    cta = (plan.get("cta_text") or f"Game is called {game} on Roblox").strip()
+    if "fisch" in blob:
+        scripts = [
+            "I found one of the weirdest Roblox games. You catch strange fish then fight to survive. The game is called How to Fisch.",
+            "This new Roblox game is actually way more fun than it looks. Catch fish, upgrade your gear, and fight. The game is called How to Fisch.",
+            "If you want a new Roblox game, try this. Catch fish to upgrade gear and fight bosses. The game is called How to Fisch.",
+            "In this Roblox game you have to catch strange fish then fight to survive. The game is called How to Fisch.",
+            "This is a fishing game and an FPS on Roblox. Keep catching fish, upgrade, and fight. The game is called How to Fisch.",
+        ]
+    elif "tongue" in blob:
+        scripts = [
+            f"This Roblox game makes your tongue keep growing. The game is called {game}.",
+            f"I found a weird Roblox escape game. Keep running while your tongue grows. {cta}.",
+            f"In this game you grab codes, grow your tongue, and escape. {cta}.",
+        ]
+    else:
+        scripts = [
+            f"I found a new Roblox game you should try. {cta}.",
+            f"This Roblox game is actually fun. {cta}.",
+        ]
     used_n = 0
     try:
         used_n = len((_load_clip_log().get("clips") or []))
@@ -469,8 +525,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         box, ink = palette[i % len(palette)]
         lines.append((a, min(b, dur), txt, box, ink))
     lines.append((end_at, dur, "Save this. Hit follow.", "yellow", "black"))
-    if not any("How to Fisch" in (row[2] or "") for row in lines):
-        lines.append((end_at, dur, "Game is called How to Fisch", "yellow", "black"))
+    if not any(game[:12].lower() in (row[2] or "").lower() for row in lines):
+        lines.append((end_at, dur, cta[:48], "yellow", "black"))
     parts = []
     for i, (a, b, txt, box, ink) in enumerate(lines):
         if b <= a:
@@ -730,6 +786,17 @@ def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
 
 def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> VideoMetadata:
     blob = f"{hook}\n{summary}".lower()
+    if "tongue" in blob:
+        print("[meta] Tongue lock — official campaign wording only")
+        return VideoMetadata(
+            title="This Roblox tongue game is actually crazy — +1 Tongue Escape #shorts",
+            description=(
+                "Your tongue keeps growing while you escape.\n"
+                "Game is called +1 Tongue Escape on Roblox.\n"
+                "https://www.roblox.com/games/122245938604556/1-Tongue-Escape"
+            ),
+            tags=["#Roblox", "#TongueEscape", "#shorts"],
+        )
     if "fisch" in blob or "how to fisch" in blob:
         print("[meta] Fisch lock — official campaign wording only")
         return VideoMetadata(
@@ -846,6 +913,13 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             description=meta.description,
             req=req,
         )
+
+        if (os.environ.get("VYRO_SKIP_UPLOAD") or "").strip().lower() in ("1", "true", "yes"):
+            size = os.path.getsize(OUTPUT_PATH) if os.path.isfile(OUTPUT_PATH) else 0
+            print(f"[4/5] SKIP upload (VYRO_SKIP_UPLOAD=1) output={OUTPUT_PATH} ({size} bytes)")
+            print("[5/5] SKIP Instagram")
+            print("[6/5] SKIP Whop submit")
+            return 0
 
         youtube_url = None
         if _youtube_token_ready():
