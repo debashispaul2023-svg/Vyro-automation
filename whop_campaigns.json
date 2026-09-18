@@ -1,26 +1,25 @@
 {
   "skip_name_markers": [
     "forgegui",
-    "forge gui",
-    "forgegui ugc",
-    "forgegui clipping"
+    "forge gui"
   ],
   "allow_name_markers": [
-    "steal a seed",
     "tongue escape",
+    "steal a seed",
     "world athletics",
     "how to fisch"
   ],
   "joined_campaigns": [
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "Steal A Seed"
+      "name_hint": "+1 Tongue Escape",
+      "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
+      "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing",
+      "campaign_uuid": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a"
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "+1 Tongue Escape",
-      "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
-      "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing"
+      "name_hint": "Steal A Seed"
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
@@ -30,7 +29,6 @@
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "How to Fisch",
       "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
-      "example_upload": "https://www.youtube.com/shorts/evmQcutp-ug",
       "source_clip_url": "https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
     }
   ]

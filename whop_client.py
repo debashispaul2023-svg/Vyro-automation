@@ -239,6 +239,8 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         print(f"[whop_client debug] Campaign content never appeared on the main page for {campaign_url} (checking iframes next).")
 
     frame = _get_content_frame(page)
+    if "bloxclips" in (campaign_url or "") or "exp_EfN9" in (campaign_url or ""):
+        frame = _open_campaigns_grid(page)
     uuid_match = re.search(
         r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
         campaign_url,
@@ -394,7 +396,7 @@ def _harvest_asset_links(frame, page, body_text: str) -> tuple[str, str]:
     if not reference_doc_url:
         try:
             reference_card = frame.get_by_text(
-                re.compile(r"edit\?usp=sharing|reference materials|resources|dos and don", re.I)
+                re.compile(r"google docs|reference materials|resources|edit\?usp=sharing|dos and don", re.I)
             ).first
             try:
                 with page.context.expect_page(timeout=4000) as new_page_info:
@@ -480,6 +482,23 @@ def _discover_root(page: Page):
     return frame
 
 
+def _open_campaigns_grid(page: Page):
+    """The 6 BloxClips cards live under /campaigns, not /discover."""
+    app = _wait_for_app_frame(page, timeout_ms=15000)
+    if app is None:
+        print("[whop] no app iframe for campaigns grid")
+        return _get_content_frame(page)
+    origin = (app.url or "").split("/discover")[0].split("/campaigns")[0]
+    target = f"{origin}/campaigns"
+    print(f"[whop] campaigns grid -> {target}")
+    try:
+        app.goto(target, timeout=20000)
+        page.wait_for_timeout(2200)
+    except Exception as exc:
+        print(f"[whop] campaigns grid goto failed: {exc}")
+    return _wait_for_app_frame(page, timeout_ms=8000) or _get_content_frame(page)
+
+
 def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
     known_urls = {entry["url"] for entry in _load_configured_campaigns()}
     newly_joined: list[str] = []
@@ -505,12 +524,22 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 print("[whop_client debug] Discover page timed out — skipping auto-join.")
                 return newly_joined
 
-            frame = _discover_root(page)
+            frame = _open_campaigns_grid(page)
             named = ("Steal A Seed", "Tongue Escape", "World Athletics", "How to Fisch")
             for title in named:
                 try:
+                    frame = _open_campaigns_grid(page)
                     print(f"[whop] board click '{title}'")
-                    frame.get_by_text(re.compile(re.escape(title), re.I)).first.click(timeout=4000, force=True)
+                    clicked = False
+                    for root in [frame, page] + list(page.frames):
+                        try:
+                            root.get_by_text(re.compile(re.escape(title), re.I)).first.click(timeout=3500, force=True)
+                            clicked = True
+                            break
+                        except Exception:
+                            continue
+                    if not clicked:
+                        raise PlaywrightTimeoutError(f"no visible text '{title}' on campaigns grid")
                     page.wait_for_timeout(1500)
                     frame = _discover_root(page)
                     body = ""
@@ -771,12 +800,24 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                 if extra:
                     campaign.source_clip_url = extra
                     print(f"[whop_client debug] Using configured source clip: {extra}")
+                doc = (entry.get("reference_doc_url") or campaign.reference_doc_url or "").strip()
+                if doc:
+                    campaign.reference_doc_url = doc
+                uuid = (entry.get("campaign_uuid") or "").strip()
+                if uuid and "campaigns/" not in (campaign.submit_page_url or ""):
+                    campaign.submit_page_url = (
+                        "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
+                    )
                 blob = f"{campaign.name} {name_hint}".lower()
+                has_assets = bool((campaign.source_clip_url or "").strip() or (campaign.reference_doc_url or "").strip())
                 if "fisch" in blob:
                     print("[whop] How to Fisch saved as last resort — trying newer BloxClips campaigns first")
                     fisch_last = campaign
                     continue
-                print(f"[whop] selected board campaign '{campaign.name}'")
+                if not has_assets:
+                    print(f"[whop] '{campaign.name}' has no Drive/Doc yet — skip to next card")
+                    continue
+                print(f"[whop] selected board campaign '{campaign.name}' doc={campaign.reference_doc_url}")
                 return campaign
             if fisch_last is not None:
                 print("[whop] no newer campaign usable — falling back to How to Fisch")
