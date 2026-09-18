@@ -10,8 +10,10 @@ from pathlib import Path
 import requests
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
-DEFAULT_VOICE = "pNInz6obpgDQGcFmaJgB"  # Adam
-DEFAULT_MODEL = "eleven_multilingual_v2"
+# Callum — first voice in the reference short, more human than Adam.
+DEFAULT_VOICE = "N2lVS1w4EtoT3dr4eOWO"
+DEFAULT_MODEL = "eleven_turbo_v2_5"
+FALLBACK_MODEL = "eleven_multilingual_v2"
 
 
 def _keys() -> list[str]:
@@ -85,6 +87,16 @@ def phrases_from_words(words: list[dict], script: str) -> list[tuple[float, floa
     return out
 
 
+def _humanize_script(text: str) -> str:
+    """Keep required game names. Add short-sentence rhythm so it sounds spoken."""
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    text = text.replace(" — ", ". ")
+    text = text.replace("How to Fisch.", "How to Fisch.")
+    # tiny pause after the hook sentence
+    text = re.sub(r"\.\s+", ". ", text)
+    return text
+
+
 def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]]:
     """
     Returns (mp3_path_or_None, word_timings).
@@ -98,33 +110,43 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
         print("[voice] no ELEVENLABS_API_KEY / ELEVENLABS_API_KEYS — skipping voice")
         return None, []
 
+    spoken = _humanize_script(text)
     voice = _voice()
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
-    payload = {
-        "text": text,
-        "model_id": DEFAULT_MODEL,
-        "voice_settings": {
-            "stability": 0.32,
-            "similarity_boost": 0.75,
-            "style": 0.45,
-            "use_speaker_boost": True,
-        },
+    settings = {
+        "stability": 0.38,
+        "similarity_boost": 0.82,
+        "style": 0.22,
+        "use_speaker_boost": True,
     }
     Path(dest_mp3).parent.mkdir(parents=True, exist_ok=True)
 
     for i, key in enumerate(keys, start=1):
         masked = f"...{key[-4:]}" if len(key) > 4 else "****"
         try:
-            print(f"[voice] ElevenLabs key #{i}/{len(keys)} ({masked})")
-            resp = requests.post(
-                url,
-                headers={"xi-api-key": key, "Content-Type": "application/json"},
-                json=payload,
-                params={"output_format": "mp3_44100_128"},
-                timeout=60,
-            )
-            if resp.status_code != 200:
-                print(f"[voice] key #{i} HTTP {resp.status_code}: {resp.text[:160]}")
+            print(f"[voice] ElevenLabs key #{i}/{len(keys)} ({masked}) voice={voice[-6:]}")
+            resp = None
+            last_status = None
+            for model in (DEFAULT_MODEL, FALLBACK_MODEL):
+                payload = {
+                    "text": spoken,
+                    "model_id": model,
+                    "voice_settings": settings,
+                    "apply_text_normalization": "auto",
+                }
+                resp = requests.post(
+                    url,
+                    headers={"xi-api-key": key, "Content-Type": "application/json"},
+                    json=payload,
+                    params={"output_format": "mp3_44100_128"},
+                    timeout=60,
+                )
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    print(f"[voice] model {model}")
+                    break
+                print(f"[voice] model {model} HTTP {resp.status_code}: {resp.text[:120]}")
+            if resp is None or last_status != 200:
                 continue
             data = resp.json()
             audio_b64 = data.get("audio_base64") or ""
@@ -132,7 +154,7 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
                 print(f"[voice] key #{i} no audio_base64")
                 continue
             Path(dest_mp3).write_bytes(base64.b64decode(audio_b64))
-            words = _words_from_alignment(text, data.get("alignment"))
+            words = _words_from_alignment(spoken, data.get("alignment"))
             side = Path(dest_mp3).with_suffix(".words.json")
             side.write_text(json.dumps(words), encoding="utf-8")
             print(f"[voice] ElevenLabs ok ({len(words)} word timings)")

@@ -58,6 +58,8 @@ from playwright.sync_api import (
 
 CAMPAIGNS_CONFIG_PATH = "whop_campaigns.json"
 WHOP_DISCOVER_URL = "https://whop.com/discover"
+BLOXCLIPS_HOME = "https://whop.com/bloxclips/"
+BLOXCLIPS_APP = "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
 WHOP_DISCOVER_URLS = (
     "https://whop.com/discover",
     "https://whop.com/discover/content-rewards/",
@@ -156,6 +158,32 @@ def _ensure_logged_in(page: Page, target_url: str) -> None:
             "your cookies (see module docstring) and update the "
             "WHOP_COOKIE_HEADER GitHub secret."
         )
+    _leave_personal_home(page)
+
+
+def _leave_personal_home(page: Page) -> None:
+    """The 2x2 companies icon sits on personal Home ($0.00). Bot must leave it."""
+    blob = ""
+    try:
+        blob = (page.inner_text("body") or "")[:2000].lower()
+    except Exception:
+        pass
+    personal = (
+        "total balance" in blob
+        or "recommended for you" in blob
+        or "your balance will appear" in blob
+        or "set up your business" in blob
+    )
+    if not personal:
+        return
+    print("[whop] personal Home ($0.00) — jumping to BloxClips campaigns")
+    for url in (BLOXCLIPS_APP, BLOXCLIPS_HOME):
+        try:
+            _safe_goto(page, url)
+            page.wait_for_timeout(1800)
+            return
+        except Exception as exc:
+            print(f"[whop] BloxClips open failed ({url}): {exc}")
 
 
 def _get_content_frame(page: Page):
@@ -304,11 +332,45 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
     if "not available in your region" in body_text.lower():
         return None
 
+
+def _harvest_asset_links(frame, page, body_text: str) -> tuple[str, str]:
+    """Pull Drive folder + Google Doc URLs from the open campaign page."""
+    chunks = [body_text or ""]
+    try:
+        chunks.append(frame.content() or "")
+    except Exception:
+        pass
+    try:
+        chunks.append(page.content() or "")
+    except Exception:
+        pass
+    try:
+        hrefs = frame.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        chunks.extend(hrefs or [])
+    except Exception:
+        pass
+    blob = "\n".join(chunks)
+    folders = re.findall(r"https://drive\.google\.com/drive/folders/[\w-]+", blob)
+    files = re.findall(r"https://drive\.google\.com/file/d/[\w-]+", blob)
+    docs = re.findall(r"https://docs\.google\.com/document/d/[\w-]+", blob)
+    folder = folders[0] if folders else ""
+    doc = docs[0] if docs else ""
+    if folder:
+        print(f"[whop] harvested Drive folder {folder}")
+    if doc:
+        print(f"[whop] harvested Google Doc {doc}")
+    if files and not folder:
+        print(f"[whop] harvested {len(files)} Drive file link(s)")
+    return folder, doc
+
+    folder, doc = _harvest_asset_links(frame, page, body_text)
+
     budget_match = re.search(r"\$([\d.]+)K?\s*/\s*\$([\d.]+)K", body_text)
     if budget_match:
         used = float(budget_match.group(1))
         total = float(budget_match.group(2))
-        if total > 0 and used / total >= 0.999:
+        if total > 0 and used / total >= 0.90:
+            print(f"[whop] skip {name_hint or 'card'} — budget {used}/{total} >= 90%")
             return None
 
     name = (page.title() or "").split("|")[0].strip() or "Whop campaign"
@@ -379,9 +441,9 @@ def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = ""
         campaign_id=campaign_id,
         name=name,
         requirements_text=body_text[:4000],
-        source_clip_url="",
+        source_clip_url=folder or "",
         submit_page_url=campaign_url,
-        reference_doc_url=reference_doc_url,
+        reference_doc_url=doc or reference_doc_url,
         platforms=platforms or ["youtube"],
     )
 
@@ -490,6 +552,15 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     modal_text = page.inner_text("body")
                 if "not available in your region" in modal_text.lower():
                     print(f"[whop_client debug] Card #{i} is region-locked, skipping.")
+                    _close_any_modal(page)
+                    continue
+                low = modal_text.lower()
+                if "forgegui" in low or "forge gui" in low:
+                    print(f"[whop_client debug] Card #{i} ForgeGUI — skip (red list).")
+                    _close_any_modal(page)
+                    continue
+                if "application" in low and "forgegui" in low:
+                    print(f"[whop_client debug] Card #{i} ForgeGUI application — skip.")
                     _close_any_modal(page)
                     continue
 
@@ -710,20 +781,68 @@ def _open_campaign_app_frame(page: Page, campaign_url: str):
 def _click_submit_clip(frame, *, last: bool = False) -> None:
     locators = [
         frame.get_by_role("button", name=re.compile("submit clip", re.I)),
-        frame.get_by_text(re.compile(r"^submit clip$", re.I)),
+        frame.get_by_text(re.compile(r"submit clip", re.I)),
         frame.locator("button", has_text=re.compile("submit clip", re.I)),
         frame.locator("a", has_text=re.compile("submit clip", re.I)),
+        frame.locator("[class*='submit' i]"),
     ]
     last_err = None
     for loc in locators:
         try:
             target = loc.last if last else loc.first
-            target.click(timeout=8000)
+            target.click(timeout=5000, force=True)
             return
         except Exception as exc:
             last_err = exc
             continue
     raise PlaywrightTimeoutError(str(last_err) if last_err else "Submit clip not found")
+
+
+def _click_submit_anywhere(page: Page, *, last: bool = False) -> object:
+    """Search the outer page and every iframe for Submit clip."""
+    roots = [page] + list(page.frames)
+    last_err = None
+    for root in roots:
+        try:
+            _click_submit_clip(root, last=last)
+            return root
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise PlaywrightTimeoutError(str(last_err) if last_err else "Submit clip not found in any frame")
+
+
+def _open_named_campaign(page: Page, campaign: WhopCampaign) -> None:
+    hint = (campaign.name or "").strip()
+    app = _wait_for_app_frame(page, timeout_ms=12000)
+    if app is not None:
+        base = (app.url or "").split("/discover")[0].split("/campaigns")[0]
+        if base.startswith("http"):
+            for path in ("/campaigns", "/my-work", "/submissions"):
+                try:
+                    print(f"[whop] iframe -> {base}{path}")
+                    app.goto(base + path, timeout=15000)
+                    page.wait_for_timeout(1500)
+                    break
+                except Exception as exc:
+                    print(f"[whop] iframe nav {path} failed: {exc}")
+    for root in [page] + list(page.frames):
+        try:
+            root.get_by_text(re.compile(r"^Campaigns$", re.I)).first.click(timeout=2500, force=True)
+            print("[whop] force-clicked Campaigns")
+            page.wait_for_timeout(1200)
+            break
+        except Exception:
+            continue
+    if hint:
+        for root in [page] + list(page.frames):
+            try:
+                root.get_by_text(re.compile(re.escape(hint), re.I)).first.click(timeout=3000, force=True)
+                print(f"[whop] opened campaign card '{hint}'")
+                page.wait_for_timeout(1500)
+                break
+            except Exception:
+                continue
 
 
 def _clean_public_video_url(video_url: str) -> str:
@@ -765,28 +884,63 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
         try:
             _ensure_logged_in(page, campaign.submit_page_url)
             page.wait_for_timeout(2000)
+            _open_named_campaign(page, campaign)
             frame = _open_campaign_app_frame(page, campaign.submit_page_url)
             print(f"[whop] submit frame url={getattr(frame, 'url', '')}")
-            _click_submit_clip(frame, last=False)
-            page.wait_for_timeout(1200)
-            _select_platform_icon(frame, video_url)
-            url_input = frame.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video", re.I))
+            hint = (campaign.name or '').lower()
             try:
-                url_input.first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
+                seen = (page.inner_text('body') or '')[:3000].lower()
             except Exception:
-                frame.locator("input").first.fill(video_url, timeout=DEFAULT_TIMEOUT_MS)
+                seen = ''
+            if hint and hint[:10] not in seen and 'forgegui' in seen:
+                raise WhopClientError(
+                    f"WRONG CAMPAIGN on screen (ForgeGUI). Refusing submit for {campaign.name}."
+                )
             try:
-                frame.get_by_role("checkbox").first.check(timeout=3000)
+                frame = _click_submit_anywhere(page, last=False)
+            except Exception:
+                frame = _get_content_frame(page)
+                _click_submit_clip(frame, last=False)
+            page.wait_for_timeout(1200)
+            form = frame
+            for root in [frame, page] + list(page.frames):
+                try:
+                    _select_platform_icon(root, video_url)
+                except Exception:
+                    pass
+            filled = False
+            for root in [frame, page] + list(page.frames):
+                try:
+                    url_input = root.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video|paste|url", re.I))
+                    url_input.first.fill(video_url, timeout=4000)
+                    form = root
+                    filled = True
+                    break
+                except Exception:
+                    try:
+                        root.locator("input[type='url'], input[type='text']").last.fill(video_url, timeout=2000)
+                        form = root
+                        filled = True
+                        break
+                    except Exception:
+                        continue
+            if not filled:
+                raise WhopClientError("Submit form opened but no URL box was found.")
+            try:
+                form.get_by_role("checkbox").first.check(timeout=3000)
             except Exception:
                 try:
-                    frame.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
+                    form.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
                 except Exception:
                     print("[whop] no requirements checkbox found — continuing")
             if dry_run:
                 print("[whop] DRY RUN — form filled, final Submit not clicked.")
                 print(f"[whop] would submit: {video_url}")
                 return
-            _click_submit_clip(frame, last=True)
+            try:
+                _click_submit_anywhere(page, last=True)
+            except Exception:
+                _click_submit_clip(form, last=True)
             page.wait_for_timeout(2500)
             _settle(page)
             try:

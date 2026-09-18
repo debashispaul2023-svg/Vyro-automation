@@ -2,7 +2,10 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    # 3x daily, US Eastern (EDT = UTC-4)
+    - cron: "0 15 * * *"  # 11:00 AM ET — lunch Reels
+    - cron: "0 20 * * *"  # 4:00 PM ET — after-school gaming
+    - cron: "0 23 * * *"  # 7:00 PM ET — prime evening Reels/Shorts
   workflow_dispatch: {}
 
 permissions:
@@ -93,12 +96,15 @@ jobs:
           WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
           ASSET_HOST_REPO: ${{ secrets.ASSET_HOST_REPO }}
           ASSET_HOST_TOKEN: ${{ secrets.ASSET_HOST_TOKEN }}
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          WHOP_ENABLE_DISCOVER: "1"
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact

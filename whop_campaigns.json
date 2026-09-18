@@ -1,4 +1,16 @@
 {
+  "skip_name_markers": [
+    "forgegui",
+    "forge gui",
+    "forgegui ugc",
+    "forgegui clipping"
+  ],
+  "allow_name_markers": [
+    "how to fisch",
+    "steal a seed",
+    "tongue escape",
+    "world athletics"
+  ],
   "joined_campaigns": [
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
@@ -13,6 +25,14 @@
       "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
       "example_upload": "https://www.youtube.com/shorts/evmQcutp-ug",
       "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing"
+    },
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "Steal A Seed"
+    },
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "World Athletics"
     }
   ]
 }

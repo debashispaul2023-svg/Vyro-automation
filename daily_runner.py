@@ -63,6 +63,8 @@ from youtube_uploader import UploadError, upload_video
 
 PROCESSED_LOG_PATH = "processed_campaigns.json"
 CLIP_LOG_PATH = "processed_clips.json"
+FISCH_DRIVE_FOLDER = "15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
+BUDGET_CLOSE_RATIO = 0.90
 SOURCE_CLIP_PATH = "input_16x9.mp4"
 OUTPUT_PATH = "output/short.mp4"
 
@@ -79,6 +81,52 @@ def _load_processed() -> set[str]:
 def _save_processed(processed: set[str]) -> None:
     with open(PROCESSED_LOG_PATH, "w", encoding="utf-8") as f:
         json.dump(sorted(processed), f, indent=2)
+
+
+
+def _parse_money_token(num: str, suffix: str) -> float:
+    n = float((num or "0").replace(",", "") or 0)
+    s = (suffix or "").lower()
+    if s == "k":
+        n *= 1_000
+    elif s == "m":
+        n *= 1_000_000
+    return n
+
+
+def _budget_used_ratio(text: str) -> float | None:
+    """Parse '$130.85 / $2K' or '$145K/$156K'. None if unknown."""
+    if not text:
+        return None
+    m = re.search(
+        r"\$\s*([\d,.]+)\s*([KkMm])?\s*/\s*\$\s*([\d,.]+)\s*([KkMm])?",
+        text,
+    )
+    if not m:
+        return None
+    used = _parse_money_token(m.group(1), m.group(2) or "")
+    total = _parse_money_token(m.group(3), m.group(4) or "")
+    if total <= 0:
+        return None
+    return used / total
+
+
+def _close_spent_campaign(log: dict, campaign: Campaign, ratio: float) -> None:
+    cid = campaign.campaign_id
+    if cid not in log["closed_campaigns"]:
+        log["closed_campaigns"].append(cid)
+    _save_clip_log(log)
+    print(f"[budget] CLOSED {campaign.name} ({cid}) at {ratio:.0%} used — never pick again")
+
+
+def _refuse_mixed_footage(campaign: Campaign) -> None:
+    name = (campaign.name or "").lower()
+    src = (campaign.source_clip_url or "") + " " + (getattr(campaign, "reference_doc_url", None) or "")
+    if FISCH_DRIVE_FOLDER in src and "fisch" not in name:
+        raise RuntimeError(
+            f"REFUSE mix: Fisch Drive folder attached to '{campaign.name}'. "
+            "Submit would go to the wrong campaign."
+        )
 
 
 def _load_clip_log() -> dict:
@@ -552,6 +600,14 @@ _SKIP_CAMPAIGN_MARKERS = (
     "rockbottom",
     "fifa + world cup",
     "world cup edits",
+    "forgegui",
+    "forge gui",
+)
+_ALLOW_CAMPAIGN_MARKERS = (
+    "how to fisch",
+    "steal a seed",
+    "tongue escape",
+    "world athletics",
 )
 
 
@@ -875,6 +931,19 @@ def main() -> int:
         return 0
 
     print(f"Found active campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
+    _refuse_mixed_footage(campaign)
+    blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
+    ratio = _budget_used_ratio(blob)
+    if ratio is not None:
+        print(f"[budget] {campaign.name} used {ratio:.0%}")
+        if ratio >= BUDGET_CLOSE_RATIO:
+            _close_spent_campaign(clip_log, campaign, ratio)
+            print("Pick another campaign tomorrow. This one is done.")
+            return 0
+    print(
+        f"[lock] clip+submit ONLY '{campaign.name}' "
+        f"id={campaign.campaign_id} footage={(campaign.source_clip_url or '')[:60]}"
+    )
 
     pack = _next_unused_pack(campaign, clip_log, want=4)
     if not pack:
