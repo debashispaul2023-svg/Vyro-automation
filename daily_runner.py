@@ -501,6 +501,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     tts = "output/fisch_tts.wav"
     os.makedirs("output", exist_ok=True)
     tts_ok = bool(spoken) and _tts_spoken(spoken, tts)
+    if spoken and not tts_ok:
+        raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
     dur = 24.0
     try:
         probe = subprocess.run(

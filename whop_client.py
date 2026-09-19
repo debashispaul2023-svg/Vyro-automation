@@ -61,8 +61,7 @@ WHOP_DISCOVER_URL = "https://whop.com/discover"
 BLOXCLIPS_HOME = "https://whop.com/bloxclips/"
 BLOXCLIPS_APP = "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
 WHOP_DISCOVER_URLS = (
-    "https://whop.com/discover",
-    "https://whop.com/discover/content-rewards/",
+    BLOXCLIPS_APP,
 )
 DEFAULT_TIMEOUT_MS = 45000
 COOKIE_DOMAIN = ".whop.com"
@@ -230,7 +229,45 @@ def _get_content_frame(page: Page):
     return page
 
 
-def _extract_campaign_details(page: Page, campaign_url: str, name_hint: str = "") -> Optional[WhopCampaign]:
+def _click_google_docs(page: Page, frame) -> str:
+    """Campaign page only shows a Google Docs chip. User will not paste the URL."""
+    labels = (
+        r"google docs",
+        r"reference materials",
+        r"resources",
+        r"footage",
+        r"content folder",
+    )
+    roots = [frame, page] + list(page.frames)
+    for pat in labels:
+        for root in roots:
+            try:
+                chip = root.get_by_text(re.compile(pat, re.I)).first
+                try:
+                    with page.context.expect_page(timeout=5000) as popped:
+                        chip.click(timeout=2500, force=True)
+                    doc_page = popped.value
+                    doc_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    url = doc_page.url or ""
+                    print(f"[whop] opened reference tab {url[:120]}")
+                    if "docs.google.com" in url or "drive.google.com" in url:
+                        doc_page.close()
+                        return url
+                    doc_page.close()
+                except PlaywrightTimeoutError:
+                    chip.click(timeout=2000, force=True)
+                    page.wait_for_timeout(1200)
+                    if "docs.google.com" in page.url or "drive.google.com" in page.url:
+                        url = page.url
+                        page.go_back(timeout=5000)
+                        return url
+            except Exception:
+                continue
+    return ""
+
+
+def _extract_campaign_details(
+page: Page, campaign_url: str, name_hint: str = "") -> Optional[WhopCampaign]:
     try:
         page.get_by_text(re.compile(r"submit clip|budget|views", re.I)).first.wait_for(
             state="visible", timeout=12000
@@ -366,6 +403,17 @@ def _harvest_asset_links(frame, page, body_text: str) -> tuple[str, str]:
     return folder, doc
 
     folder, doc = _harvest_asset_links(frame, page, body_text)
+    if not folder and not doc:
+        opened = _click_google_docs(page, frame)
+        if opened:
+            print(f"[whop] Google Docs chip opened {opened[:140]}")
+            if "/folders/" in opened:
+                folder = opened
+            else:
+                doc = opened
+            folder2, doc2 = _harvest_asset_links(frame, page, body_text)
+            folder = folder or folder2
+            doc = doc or doc2
 
     budget_match = re.search(r"\$([\d.]+)K?\s*/\s*\$([\d.]+)K", body_text)
     if budget_match:
@@ -482,21 +530,82 @@ def _discover_root(page: Page):
     return frame
 
 
+BLOX_CAMPAIGN_IDS = {
+    "Tongue Escape": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+    "How to Fisch": "b59bb70c-58bf-44c1-9e44-0b54c59d90f4",
+}
+
+
+def _app_origin(page: Page) -> str:
+    app = _wait_for_app_frame(page, timeout_ms=12000)
+    if app is None:
+        return ""
+    return (app.url or "").split("/discover")[0].split("/campaigns")[0]
+
+
 def _open_campaigns_grid(page: Page):
-    """The 6 BloxClips cards live under /campaigns, not /discover."""
+    """Prefer Discover brand grid (6 cards). /campaigns often only shows already-opened Fisch."""
     app = _wait_for_app_frame(page, timeout_ms=15000)
     if app is None:
         print("[whop] no app iframe for campaigns grid")
         return _get_content_frame(page)
-    origin = (app.url or "").split("/discover")[0].split("/campaigns")[0]
-    target = f"{origin}/campaigns"
-    print(f"[whop] campaigns grid -> {target}")
+    origin = _app_origin(page)
+    for path in ("/discover", "/campaigns"):
+        target = f"{origin}{path}"
+        print(f"[whop] board -> {target}")
+        try:
+            app.goto(target, timeout=20000)
+            page.wait_for_timeout(2000)
+            app.evaluate("window.scrollTo(0, 800)")
+            page.wait_for_timeout(600)
+        except Exception as exc:
+            print(f"[whop] board nav {path} failed: {exc}")
     try:
-        app.goto(target, timeout=20000)
-        page.wait_for_timeout(2200)
-    except Exception as exc:
-        print(f"[whop] campaigns grid goto failed: {exc}")
+        snippet = (app.inner_text("body") or "")[:500].replace("\n", " | ")
+        print(f"[whop] board text: {snippet!r}")
+    except Exception:
+        pass
     return _wait_for_app_frame(page, timeout_ms=8000) or _get_content_frame(page)
+
+
+def _open_named_board_campaign(page: Page, title: str) -> bool:
+    origin = _app_origin(page)
+    cid = ""
+    for key, uuid in BLOX_CAMPAIGN_IDS.items():
+        if key.lower() in title.lower() or title.lower() in key.lower():
+            cid = uuid
+            break
+    if origin and cid:
+        target = f"{origin}/campaigns/{cid}"
+        print(f"[whop] direct open {title} -> {target}")
+        app = _wait_for_app_frame(page, timeout_ms=8000)
+        if app is not None:
+            try:
+                app.goto(target, timeout=20000)
+                page.wait_for_timeout(1800)
+                return True
+            except Exception as exc:
+                print(f"[whop] direct open failed: {exc}")
+    frame = _open_campaigns_grid(page)
+    needles = [title, title.replace("+1 ", ""), title.split("[")[0].strip()]
+    if "tongue" in title.lower():
+        needles += ["Tongue", "+1 Tongue"]
+    if "steal" in title.lower():
+        needles += ["Steal", "SEED"]
+    if "athletics" in title.lower():
+        needles += ["Athletics", "WORLD ATHLETICS"]
+    if "fisch" in title.lower():
+        needles += ["Fisch", "HOW TO FISCH"]
+    for root in [frame, page] + list(page.frames):
+        for needle in needles:
+            try:
+                root.get_by_text(re.compile(re.escape(needle), re.I)).first.click(timeout=2500, force=True)
+                print(f"[whop] clicked text {needle!r}")
+                page.wait_for_timeout(1500)
+                return True
+            except Exception:
+                continue
+    return False
 
 
 def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str]:
@@ -509,7 +618,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
         page = context.new_page()
         try:
             landed = False
-            board = [BLOXCLIPS_APP, BLOXCLIPS_HOME] + list(WHOP_DISCOVER_URLS)
+            board = [BLOXCLIPS_APP]
             for start_url in board:
                 try:
                     print(f"[whop_client debug] Opening Discover {start_url}")
@@ -525,22 +634,12 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 return newly_joined
 
             frame = _open_campaigns_grid(page)
-            named = ("Steal A Seed", "Tongue Escape", "World Athletics", "How to Fisch")
+            named = ("Tongue Escape", "Steal A Seed", "World Athletics")
             for title in named:
                 try:
-                    frame = _open_campaigns_grid(page)
                     print(f"[whop] board click '{title}'")
-                    clicked = False
-                    for root in [frame, page] + list(page.frames):
-                        try:
-                            root.get_by_text(re.compile(re.escape(title), re.I)).first.click(timeout=3500, force=True)
-                            clicked = True
-                            break
-                        except Exception:
-                            continue
-                    if not clicked:
+                    if not _open_named_board_campaign(page, title):
                         raise PlaywrightTimeoutError(f"no visible text '{title}' on campaigns grid")
-                    page.wait_for_timeout(1500)
                     frame = _discover_root(page)
                     body = ""
                     try:
@@ -565,13 +664,12 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     _close_any_modal(page)
                 except Exception as exc:
                     print(f"[whop] could not open '{title}': {exc}")
-            rate = re.compile(r"\$[\d.]+\s*/\s*1k", re.I)
-            card_texts = frame.get_by_text(rate)
-            try:
-                card_count = min(card_texts.count(), 20)
-            except Exception:
-                card_count = 0
-            print(f"[whop_client debug] Found {card_count} candidate campaign rate labels on Discover (iframe).")
+            print("[whop] marketplace $1k card loop off — BloxClips board names only")
+            if newly_joined:
+                _save_new_campaign_urls(newly_joined)
+                return newly_joined
+            card_texts = page.locator("not-a-real-thing")
+            card_count = 0
 
             if card_count == 0:
                 # Fall back to in-app Discover of an already-joined experience.
