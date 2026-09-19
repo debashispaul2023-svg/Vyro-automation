@@ -621,14 +621,17 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     os.makedirs("output", exist_ok=True)
     dur = _probe_dur(video_path) or 24.0
     tts_ok = False
+    cta_ok = False
     if spoken:
         body_ok = _tts_spoken(spoken, body_wav)
         body_words = list(getattr(_tts_spoken, "last_words", []) or [])
-        cta_ok = _tts_spoken("Save. Follow.", cta_wav)
+        cta_ok = _tts_spoken("Save. Hit follow.", cta_wav)
+        if not cta_ok:
+            cta_ok = _tts_spoken("Save. Hit follow.", cta_wav)
         _tts_spoken.last_words = body_words
         if not body_ok:
             raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
-        tts_ok = _layout_voice(body_wav, cta_wav if cta_ok else "", tts, dur)
+        tts_ok = _layout_voice(body_wav, "", tts, dur)
         if not tts_ok:
             shutil.copy(body_wav, tts)
             tts_ok = True
@@ -638,8 +641,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         karaoke = [(a, b, t) for a, b, t in phrases_from_words(words, spoken)]
     font = _font()
     # Stickers are pinned to the VIDEO end, not the early voice end.
-    save_a, save_b = max(0.0, dur - 2.35), max(0.4, dur - 1.15)
-    follow_a, follow_b = max(0.0, dur - 1.15), dur
+    save_a, save_b = max(0.0, dur - 2.6), max(0.5, dur - 1.3)
+    follow_a, follow_b = max(0.0, dur - 1.3), dur
     end_at = max(0.0, dur - 3.0)
     parts = []
     for a, b, txt in karaoke:
@@ -661,16 +664,14 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             f"x=(w-text_w)/2:y=h-360:enable='between(t,{a:.2f},{b:.2f})'"
         )
     parts.append(
-        f"drawtext={font}text='SAVE':fontcolor=white:fontsize=120:"
-        f"borderw=12:bordercolor=0x001033:"
-        f"shadowcolor=black@0.95:shadowx=5:shadowy=5:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,{save_a:.2f},{save_b:.2f})'"
+        f"drawtext={font}text=' SAVE ':fontcolor=0x001033:fontsize=110:"
+        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=28:"
+        f"x=(w-text_w)/2:y=h-430:enable='between(t,{save_a:.2f},{save_b:.2f})'"
     )
     parts.append(
-        f"drawtext={font}text='HIT FOLLOW':fontcolor=white:fontsize=96:"
-        f"borderw=12:bordercolor=0x001033:"
-        f"shadowcolor=black@0.95:shadowx=5:shadowy=5:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
+        f"drawtext={font}text=' HIT FOLLOW ':fontcolor=0x001033:fontsize=88:"
+        f"box=1:boxcolor=0xFFE600@0.95:boxborderw=28:"
+        f"x=(w-text_w)/2:y=h-430:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
     )
     if req_has_code:
         raw_req = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
@@ -693,35 +694,59 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     if icon:
         draw = (
             f"[0:v]{draw}[base];"
-            f"[1:v]scale=280:280:force_original_aspect_ratio=decrease[ic];"
-            f"[base][ic]overlay=(W-w)/2:H-h-320:enable='{en}'[v]"
+            f"[1:v]scale=820:820:force_original_aspect_ratio=decrease,"
+            f"pad=840:840:(ow-iw)/2:(oh-ih)/2:white[ic];"
+            f"[base][ic]overlay=(W-w)/2:H-h-90:enable='{en}'[v]"
         )
-        print(f"[fisch] overlay icon {icon}")
+        print(f"[fisch] thumbnail icon {icon}")
+    cta_ms = int(max(0.0, save_a) * 1000)
     ff = ["ffmpeg", "-y", "-i", video_path]
+    extra_a = 0
     if icon:
         ff += ["-i", icon]
+    if tts_ok:
+        ff += ["-i", tts]
+        extra_a += 1
+    if cta_ok and os.path.isfile(cta_wav):
+        ff += ["-i", cta_wav]
+        extra_a += 1
+    # audio indexes: 0=video, 1=icon?, then tts, then cta
+    a_tts = 2 if icon else 1
+    a_cta = a_tts + 1
     if icon and tts_ok:
+        audio = f"[0:a]volume=0.32[ag];[{a_tts}:a]volume=1.4[ab];"
+        if extra_a >= 2:
+            audio += (
+                f"[{a_cta}:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
+                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0[a]"
+            )
+        else:
+            audio += "[ag][ab]amix=inputs=2:duration=first:dropout_transition=0[a]"
         ff += [
-            "-i", tts,
-            "-filter_complex",
-            draw + ";[0:a]volume=0.35[a0];[2:a]volume=1.35[a1];"
-            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+            "-filter_complex", draw + ";" + audio,
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-            "-c:a", "aac", "-shortest", work,
+            "-c:a", "aac", "-t", f"{dur:.2f}", work,
         ]
     elif icon:
         ff += ["-filter_complex", draw, "-map", "[v]", "-c:a", "copy",
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", work]
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+               "-t", f"{dur:.2f}", work]
     elif tts_ok:
+        audio = f"[0:a]volume=0.32[ag];[1:a]volume=1.4[ab];"
+        if extra_a >= 2:
+            audio += (
+                f"[2:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
+                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0[a]"
+            )
+        else:
+            audio += "[ag][ab]amix=inputs=2:duration=first:dropout_transition=0[a]"
         ff += [
-            "-i", tts,
             "-filter_complex",
-            f"[0:v]{draw}[v];[0:a]volume=0.35[a0];[1:a]volume=1.35[a1];"
-            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+            f"[0:v]{draw}[v];" + audio,
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-            "-c:a", "aac", "-shortest", work,
+            "-c:a", "aac", "-t", f"{dur:.2f}", work,
         ]
     else:
         ff += ["-vf", draw, "-c:a", "copy", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", work]
