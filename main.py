@@ -64,12 +64,14 @@ def run_pipeline(
               f"{req.min_seconds}-{req.max_seconds}s, "
               f"hashtags={req.mandatory_hashtags}")
 
+        if campaign_audio_path:
+            print("[2/4] NOTE: campaign_audio_path is set but the current "
+                  "ffmpeg-based renderer does not mix campaign audio anymore.")
         render_short(
             source_path=source_path,
             output_path=output_path,
             req=req,
             fallback_caption_text=hook,
-            campaign_audio_path=campaign_audio_path,
         )
         print(f"[2/4] Rendered vertical short -> {output_path}")
 
