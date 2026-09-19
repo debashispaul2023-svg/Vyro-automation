@@ -989,7 +989,8 @@ def _click_submit_clip(frame, *, last: bool = False) -> None:
     for loc in locators:
         try:
             target = loc.last if last else loc.first
-            target.click(timeout=5000, force=True)
+            target.scroll_into_view_if_needed(timeout=4000)
+            target.click(timeout=12000, force=True)
             return
         except Exception as exc:
             last_err = exc
@@ -1111,7 +1112,7 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
             for root in [frame, page] + list(page.frames):
                 try:
                     url_input = root.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video|paste|url", re.I))
-                    url_input.first.fill(video_url, timeout=4000)
+                    url_input.first.fill(video_url, timeout=10000)
                     form = root
                     filled = True
                     break

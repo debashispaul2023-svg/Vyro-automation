@@ -927,10 +927,19 @@ def _instagram_permalink(media_id: str) -> str:
 def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
     if platform == "vyro":
         vyro_run_submit(campaign, video_url)
-    elif platform == "whop":
-        whop_submit_video_link(campaign, video_url)
-    else:
+        return
+    if platform != "whop":
         raise ValueError(f"Unknown platform: {platform}")
+    last = None
+    for attempt in range(1, 4):
+        try:
+            print(f"[whop] submit attempt {attempt}/3 {video_url}")
+            whop_submit_video_link(campaign, video_url)
+            return
+        except Exception as exc:
+            last = exc
+            print(f"[whop] submit attempt {attempt} failed: {exc}")
+    raise last
 
 
 def _parse_requirements(campaign: Campaign) -> CampaignRequirements:

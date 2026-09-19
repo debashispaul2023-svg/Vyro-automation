@@ -1,0 +1,67 @@
+name: TEST - Campaign flow (no upload)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  test-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg + imagemagick
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core
+
+      - name: Fix ImageMagick security policy for text rendering
+        run: |
+          set -e
+          for f in /etc/ImageMagick-6/policy.xml /etc/ImageMagick/policy.xml; do
+            if [ -f "$f" ]; then
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read" pattern="@*"/g' "$f"
+            fi
+          done
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run campaign flow test (no upload)
+        env:
+          PYTHONUNBUFFERED: "1"
+          VYRO_SKIP_UPLOAD: "1"
+          WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          WHOP_ENABLE_DISCOVER: "1"
+        run: python test_campaign_flow.py
+
+      - name: Publish raw short.mp4
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if [ ! -f output/short.mp4 ]; then
+            echo "no output/short.mp4"
+            exit 0
+          fi
+          gh release view test-flow-latest >/dev/null 2>&1 || \
+            gh release create test-flow-latest --prerelease --title "test-flow-latest" --notes "Direct MP4 from last TEST run. Not a zip."
+          gh release upload test-flow-latest output/short.mp4 --clobber
+          echo "RAW_MP4=https://github.com/${GITHUB_REPOSITORY}/releases/download/test-flow-latest/short.mp4"
