@@ -22,7 +22,7 @@ def render_short(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     ff = [
         "ffmpeg", "-y", "-i", source_path,
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
         "-r", "30",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-ar", "44100", "-ac", "2",

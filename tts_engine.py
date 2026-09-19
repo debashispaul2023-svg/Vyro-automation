@@ -59,6 +59,19 @@ def _words_from_alignment(text: str, alignment: dict | None) -> list[dict]:
         return []
 
 
+def karaoke_words(words: list[dict], delay: float = 0.0) -> list[tuple[float, float, str]]:
+    """One on-screen word at a time, aligned to spoken timing."""
+    out = []
+    for w in words or []:
+        txt = re.sub(r"[^\w+#']+", "", str(w.get("text") or ""))
+        if not txt:
+            continue
+        a = max(0.0, float(w.get("start") or 0) + delay)
+        b = max(a + 0.12, float(w.get("end") or 0) + delay + 0.04)
+        out.append((a, b, txt))
+    return out
+
+
 def phrases_from_words(words: list[dict], script: str) -> list[tuple[float, float, str]]:
     """Group timed words into the script sentences."""
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
@@ -114,9 +127,9 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
     voice = _voice()
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
     settings = {
-        "stability": 0.38,
-        "similarity_boost": 0.82,
-        "style": 0.22,
+        "stability": 0.28,
+        "similarity_boost": 0.78,
+        "style": 0.62,
         "use_speaker_boost": True,
     }
     Path(dest_mp3).parent.mkdir(parents=True, exist_ok=True)
