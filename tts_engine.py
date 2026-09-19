@@ -11,9 +11,10 @@ import requests
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
 # Callum — first voice in the reference short, more human than Adam.
-DEFAULT_VOICE = "N2lVS1w4EtoT3dr4eOWO"
-DEFAULT_MODEL = "eleven_turbo_v2_5"
-FALLBACK_MODEL = "eleven_multilingual_v2"
+# Chris — brighter, more energetic male than Callum.
+DEFAULT_VOICE = "iP95p4xoKVk53GoZ742B"
+DEFAULT_MODEL = "eleven_multilingual_v2"
+FALLBACK_MODEL = "eleven_turbo_v2_5"
 
 
 def _keys() -> list[str]:
@@ -101,11 +102,10 @@ def phrases_from_words(words: list[dict], script: str) -> list[tuple[float, floa
 
 
 def _humanize_script(text: str) -> str:
-    """Keep required game names. Add short-sentence rhythm so it sounds spoken."""
+    """Short punchy lines. TTS reads this more energetically."""
     text = re.sub(r"\s+", " ", (text or "").strip())
     text = text.replace(" — ", ". ")
-    text = text.replace("How to Fisch.", "How to Fisch.")
-    # tiny pause after the hook sentence
+    text = text.replace("+1", "Plus One")
     text = re.sub(r"\.\s+", ". ", text)
     return text
 
@@ -127,10 +127,11 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
     voice = _voice()
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
     settings = {
-        "stability": 0.28,
-        "similarity_boost": 0.78,
-        "style": 0.62,
+        "stability": 0.18,
+        "similarity_boost": 0.62,
+        "style": 0.82,
         "use_speaker_boost": True,
+        "speed": 1.08,
     }
     Path(dest_mp3).parent.mkdir(parents=True, exist_ok=True)
 
@@ -158,6 +159,18 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
                 if resp.status_code == 200:
                     print(f"[voice] model {model}")
                     break
+                if resp.status_code == 400 and "speed" in payload.get("voice_settings", {}):
+                    payload["voice_settings"].pop("speed", None)
+                    resp = requests.post(
+                        url,
+                        headers={"xi-api-key": key, "Content-Type": "application/json"},
+                        json=payload,
+                        params={"output_format": "mp3_44100_128"},
+                        timeout=60,
+                    )
+                    if resp.status_code == 200:
+                        print(f"[voice] model {model} (no speed field)")
+                        break
                 print(f"[voice] model {model} HTTP {resp.status_code}: {resp.text[:120]}")
             if resp is None or last_status != 200:
                 continue

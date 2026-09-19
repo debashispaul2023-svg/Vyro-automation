@@ -421,7 +421,10 @@ def _tts_spoken(text: str, dest_wav: str) -> bool:
     if not path:
         return False
     try:
-        subprocess.run(["ffmpeg", "-y", "-i", path, dest_wav], check=True, capture_output=True, timeout=30)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-filter:a", "atempo=1.08,volume=1.25", dest_wav],
+            check=True, capture_output=True, timeout=30,
+        )
     except Exception as exc:
         print(f"[voice] mp3->wav failed: {exc}")
         return False
@@ -434,8 +437,11 @@ def _quality_boost(video_path: str) -> None:
     work = "output/quality.mp4"
     ff = [
         "ffmpeg", "-y", "-i", video_path,
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.6:5:5:0.0",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-vf",
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,setsar=1,"
+        "unsharp=5:5:1.4:5:5:0.0,eq=contrast=1.1:saturation=1.14:brightness=0.02",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "17",
         "-c:a", "aac", "-b:a", "192k", work,
     ]
     try:
@@ -498,8 +504,7 @@ def _apply_requirement_tools(campaign: Campaign, video_path: str) -> None:
         f"speak={plan.get('speak_text')!r} "
         f"cta={plan.get('cta_text')!r}"
     )
-    if plan.get("need_quality_boost"):
-        _quality_boost(video_path)
+    _quality_boost(video_path)
     campaign._edit_plan = plan  # type: ignore[attr-defined]
     _apply_campaign_pack(campaign, video_path)
 
@@ -514,22 +519,28 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         return
     game = (plan.get("speak_text") or campaign.name or "this Roblox game").strip()
     cta = (plan.get("cta_text") or f"Game is called {game} on Roblox").strip()
+    req_has_code = bool(re.search(r"\b(use code|promo code|referral code)\b", blob))
     if "fisch" in blob:
         scripts = [
-            "Wait. This Roblox game is actually insane. You catch weird fish. You upgrade your gear. Then you fight to survive. That loop is the whole game. The name is How to Fisch. Game is called How to Fisch on Roblox. Save this. Follow for more.",
-            "Yo. I found one of the weirdest Roblox games. Catch fish. Upgrade. Fight. Repeat. It looks simple and then it slaps. Game is called How to Fisch on Roblox. Hit follow if you want more.",
-            "Okay this is not a normal fishing game. You catch strange fish then you fight to stay alive. Upgrade your gear or you lose. The game is called How to Fisch on Roblox. Save this and follow.",
+            "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Fight to survive. That is the whole loop. Game is called How to Fisch on Roblox. Save. Follow.",
+            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Game is called How to Fisch on Roblox. Save. Follow.",
+            "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. Game is called How to Fisch on Roblox. Save. Follow.",
         ]
     elif "tongue" in blob:
         scripts = [
-            "Wait. This Roblox game is actually crazy. You grab codes. Your tongue keeps growing. Then you swing and you escape. Stage after stage. That is the whole loop. Game is called +1 Tongue Escape on Roblox. Use code WELCOME1. Save this. Hit follow.",
-            "Yo. I found a wild Roblox escape game. Pick up codes. Grow your tongue. Run the parkour. Do not fall. The name is +1 Tongue Escape. Game is called +1 Tongue Escape on Roblox. Follow if you want more.",
-            "Okay look. In this game you grab codes, grow your tongue, and escape. The tongue gets longer every time. Then the map gets harder. Game is called +1 Tongue Escape on Roblox. Use code WELCOME1. Save this and follow.",
+            "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
+            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Do not fall. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
+            "LOOK. Grow the tongue. Swing. Escape. That is the whole game. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
+        ]
+    elif "steal" in blob and "seed" in blob:
+        scripts = [
+            "WAIT. This Roblox game is actually wild. You sneak in. You steal a seed. Then you run. Game is called Steal A Seed on Roblox. Save. Follow.",
+            "YO. Watch this. Grab the seed and get out before they catch you. Game is called Steal A Seed on Roblox. Save. Follow.",
         ]
     else:
         scripts = [
-            f"Wait. This Roblox game is actually fun. Watch this. {cta}. Save this. Hit follow.",
-            f"Yo. I found a new Roblox game you should try. {cta}. Follow for more.",
+            f"WAIT. This Roblox game is actually fun. Watch this. {cta}. Save. Follow.",
+            f"YO. I found a new Roblox game you should try. {cta}. Save. Follow.",
         ]
     used_n = 0
     try:
@@ -562,11 +573,25 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     karaoke = karaoke_words(words, delay=0.0)[:48]
     if not karaoke and spoken:
         karaoke = [(a, b, t) for a, b, t in phrases_from_words(words, spoken)]
+    def _word_hit(needles: set[str], fallback: tuple[float, float]) -> tuple[float, float]:
+        for w in words:
+            t = re.sub(r"[^a-z]", "", str(w.get("text") or "").lower())
+            if t in needles:
+                a = float(w.get("start") or 0)
+                b = max(a + 0.7, float(w.get("end") or 0) + 0.45)
+                return a, min(dur, b)
+        return fallback
+
+    save_a, save_b = _word_hit({"save"}, (max(0.0, dur - 2.4), max(0.8, dur - 1.2)))
+    follow_a, follow_b = _word_hit({"follow"}, (max(0.0, dur - 1.2), dur))
     parts = []
     for a, b, txt in karaoke:
         if b <= a or not txt:
             continue
-        b = min(b, max(a + 0.08, dur - 3.05))
+        clean = re.sub(r"[^A-Za-z0-9+#']+", "", txt)
+        if clean.lower() in {"save", "follow"}:
+            continue
+        b = min(b, max(a + 0.08, dur - 0.05))
         safe = txt.replace("\\", " ").replace("'", "").replace(":", " -")[:22]
         parts.append(
             f"drawtext=text='{safe}':fontcolor=white:fontsize=78:"
@@ -574,26 +599,35 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
             f"x=(w-text_w)/2:y=h-360:enable='between(t,{a:.2f},{b:.2f})'"
         )
-    end_start = max(0.0, dur - 3.0)
-    code = "WELCOME1"
-    raw_req = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
-    if "BONUS500" in raw_req and "WELCOME1" not in raw_req:
-        code = "BONUS500"
     parts.append(
-        f"drawtext=text='Use code {code}':fontcolor=white:fontsize=68:"
-        f"borderw=8:bordercolor=0x001033:"
-        f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
-        f"x=(w-text_w)/2:y=h-300:enable='between(t,{end_start:.2f},{dur:.2f})'"
+        f"drawtext=text='SAVE':fontcolor=white:fontsize=110:"
+        f"borderw=10:bordercolor=0x001033:"
+        f"shadowcolor=black@0.9:shadowx=4:shadowy=4:"
+        f"x=(w-text_w)/2:y=h-520:enable='between(t,{save_a:.2f},{save_b:.2f})'"
     )
     parts.append(
-        "drawtext=text='Save this. Hit follow.':fontcolor=white:fontsize=56:"
-        "borderw=7:bordercolor=0x001033:"
-        "shadowcolor=black@0.85:shadowx=3:shadowy=3:"
-        f"x=(w-text_w)/2:y=h-180:enable='between(t,{end_start:.2f},{dur:.2f})'"
+        f"drawtext=text='HIT FOLLOW':fontcolor=white:fontsize=92:"
+        f"borderw=10:bordercolor=0x001033:"
+        f"shadowcolor=black@0.9:shadowx=4:shadowy=4:"
+        f"x=(w-text_w)/2:y=h-520:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
     )
+    if req_has_code:
+        raw_req = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
+        code = "WELCOME1"
+        if "BONUS500" in raw_req:
+            code = "BONUS500"
+        cm = re.search(r"(?:use code|promo code)\s*[:\-]?\s*([A-Za-z0-9]{3,16})", raw_req, re.I)
+        if cm:
+            code = cm.group(1)
+        ca, cb = _word_hit({"code"}, (max(0.0, dur - 3.2), max(0.8, dur - 2.4)))
+        parts.append(
+            f"drawtext=text='Use code {code}':fontcolor=white:fontsize=68:"
+            f"borderw=8:bordercolor=0x001033:"
+            f"x=(w-text_w)/2:y=h-300:enable='between(t,{ca:.2f},{cb:.2f})'"
+        )
     caption_vf = ",".join(parts) if parts else "null"
     draw = caption_vf
-    print(f"[caption] karaoke outline words={len(karaoke)} (white + navy)")
+    print(f"[caption] karaoke={len(karaoke)} save={save_a:.1f}-{save_b:.1f} follow={follow_a:.1f}-{follow_b:.1f}")
     en = f"gte(t,{end_at:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
@@ -613,12 +647,12 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             draw + ";[0:a]volume=0.35[a0];[2:a]volume=1.35[a1];"
             "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
             "-c:a", "aac", "-shortest", work,
         ]
     elif icon:
         ff += ["-filter_complex", draw, "-map", "[v]", "-c:a", "copy",
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", work]
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", work]
     elif tts_ok:
         ff += [
             "-i", tts,
@@ -626,7 +660,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             f"[0:v]{draw}[v];[0:a]volume=0.35[a0];[1:a]volume=1.35[a1];"
             "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
             "-c:a", "aac", "-shortest", work,
         ]
     else:
@@ -648,7 +682,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
                 f"[0:v]{caption_vf}[v];[0:a]volume=0.35[a0];[1:a]volume=1.35[a1];"
                 "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
                 "-map", "[v]", "-map", "[a]",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
                 "-c:a", "aac", "-shortest", work,
             ]
         else:
