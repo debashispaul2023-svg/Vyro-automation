@@ -412,6 +412,68 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
 
 
 
+def _probe_dur(path: str) -> float:
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=20,
+        )
+        return float((probe.stdout or "0").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _font() -> str:
+    for p in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        if os.path.isfile(p):
+            return f"fontfile={p}:"
+    return ""
+
+
+def _layout_voice(body_wav: str, cta_wav: str, dest: str, video_dur: float) -> bool:
+    """Body plays from 0. CTA (Save. Follow.) is pinned to the last 2.3s."""
+    body_d = _probe_dur(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
+    cta_d = _probe_dur(cta_wav) if cta_wav and os.path.isfile(cta_wav) else 0.0
+    cta_at = max(1.0, video_dur - max(cta_d, 2.1) - 0.05)
+    gap = max(0.15, cta_at - body_d)
+    if body_d > cta_at - 0.2 and body_wav:
+        trimmed = dest.replace(".wav", "_bodytrim.wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", body_wav, "-t", f"{max(0.8, cta_at - 0.25):.2f}",
+             "-c:a", "pcm_s16le", trimmed],
+            check=True, capture_output=True, timeout=30,
+        )
+        body_wav = trimmed
+        body_d = _probe_dur(body_wav)
+        gap = max(0.15, cta_at - body_d)
+    parts = []
+    if body_wav and os.path.isfile(body_wav):
+        parts.append(body_wav)
+    silence = dest.replace(".wav", "_gap.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
+         "-t", f"{gap:.2f}", "-c:a", "pcm_s16le", silence],
+        check=True, capture_output=True, timeout=20,
+    )
+    parts.append(silence)
+    if cta_wav and os.path.isfile(cta_wav):
+        parts.append(cta_wav)
+    lst = dest.replace(".wav", "_concat.txt")
+    with open(lst, "w", encoding="utf-8") as fh:
+        for p in parts:
+            fh.write(f"file '{os.path.abspath(p)}'\n")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c:a", "pcm_s16le", dest],
+        check=True, capture_output=True, timeout=30,
+    )
+    print(f"[voice] layout body={body_d:.1f}s gap={gap:.1f}s cta@{cta_at:.1f}s video={video_dur:.1f}s")
+    return os.path.isfile(dest) and os.path.getsize(dest) > 200
+
+
 def _tts_spoken(text: str, dest_wav: str) -> bool:
     """ElevenLabs only. No espeak."""
     if not (text or "").strip():
@@ -522,25 +584,25 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     req_has_code = bool(re.search(r"\b(use code|promo code|referral code)\b", blob))
     if "fisch" in blob:
         scripts = [
-            "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Fight to survive. That is the whole loop. Game is called How to Fisch on Roblox. Save. Follow.",
-            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Game is called How to Fisch on Roblox. Save. Follow.",
-            "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. Game is called How to Fisch on Roblox. Save. Follow.",
+            "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Fight to survive. That is the whole loop. Game is called How to Fisch on Roblox.",
+            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Game is called How to Fisch on Roblox.",
+            "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. Game is called How to Fisch on Roblox.",
         ]
     elif "tongue" in blob:
         scripts = [
-            "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
-            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Do not fall. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
-            "LOOK. Grow the tongue. Swing. Escape. That is the whole game. Game is called Plus One Tongue Escape on Roblox. Save. Follow.",
+            "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. The stages keep getting harder. Game is called Plus One Tongue Escape on Roblox.",
+            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Do not fall. Game is called Plus One Tongue Escape on Roblox.",
+            "LOOK. Grow the tongue. Swing. Escape. That is the whole game. Game is called Plus One Tongue Escape on Roblox.",
         ]
     elif "steal" in blob and "seed" in blob:
         scripts = [
-            "WAIT. This Roblox game is actually wild. You sneak in. You steal a seed. Then you run. Game is called Steal A Seed on Roblox. Save. Follow.",
-            "YO. Watch this. Grab the seed and get out before they catch you. Game is called Steal A Seed on Roblox. Save. Follow.",
+            "WAIT. This Roblox game is actually wild. You sneak in. You steal a seed. Then you run. Game is called Steal A Seed on Roblox.",
+            "YO. Watch this. Grab the seed and get out before they catch you. Game is called Steal A Seed on Roblox.",
         ]
     else:
         scripts = [
-            f"WAIT. This Roblox game is actually fun. Watch this. {cta}. Save. Follow.",
-            f"YO. I found a new Roblox game you should try. {cta}. Save. Follow.",
+            f"WAIT. This Roblox game is actually fun. Watch this. {cta}.",
+            f"YO. I found a new Roblox game you should try. {cta}.",
         ]
     used_n = 0
     try:
@@ -554,36 +616,31 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         spoken = ""
     work = "output/fisch_pack.mp4"
     tts = "output/fisch_tts.wav"
+    body_wav = "output/fisch_body.wav"
+    cta_wav = "output/fisch_cta.wav"
     os.makedirs("output", exist_ok=True)
-    tts_ok = bool(spoken) and _tts_spoken(spoken, tts)
-    if spoken and not tts_ok:
-        raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
-    dur = 24.0
-    try:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, timeout=20,
-        )
-        dur = float((probe.stdout or "0").strip() or 0) or 24.0
-    except Exception:
-        pass
-    end_at = max(0.0, dur - 3.2)
+    dur = _probe_dur(video_path) or 24.0
+    tts_ok = False
+    if spoken:
+        body_ok = _tts_spoken(spoken, body_wav)
+        body_words = list(getattr(_tts_spoken, "last_words", []) or [])
+        cta_ok = _tts_spoken("Save. Follow.", cta_wav)
+        _tts_spoken.last_words = body_words
+        if not body_ok:
+            raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
+        tts_ok = _layout_voice(body_wav, cta_wav if cta_ok else "", tts, dur)
+        if not tts_ok:
+            shutil.copy(body_wav, tts)
+            tts_ok = True
     words = list(getattr(_tts_spoken, "last_words", []) or [])
     karaoke = karaoke_words(words, delay=0.0)[:48]
     if not karaoke and spoken:
         karaoke = [(a, b, t) for a, b, t in phrases_from_words(words, spoken)]
-    def _word_hit(needles: set[str], fallback: tuple[float, float]) -> tuple[float, float]:
-        for w in words:
-            t = re.sub(r"[^a-z]", "", str(w.get("text") or "").lower())
-            if t in needles:
-                a = float(w.get("start") or 0)
-                b = max(a + 0.7, float(w.get("end") or 0) + 0.45)
-                return a, min(dur, b)
-        return fallback
-
-    save_a, save_b = _word_hit({"save"}, (max(0.0, dur - 2.4), max(0.8, dur - 1.2)))
-    follow_a, follow_b = _word_hit({"follow"}, (max(0.0, dur - 1.2), dur))
+    font = _font()
+    # Stickers are pinned to the VIDEO end, not the early voice end.
+    save_a, save_b = max(0.0, dur - 2.35), max(0.4, dur - 1.15)
+    follow_a, follow_b = max(0.0, dur - 1.15), dur
+    end_at = max(0.0, dur - 3.0)
     parts = []
     for a, b, txt in karaoke:
         if b <= a or not txt:
@@ -591,25 +648,29 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         clean = re.sub(r"[^A-Za-z0-9+#']+", "", txt)
         if clean.lower() in {"save", "follow"}:
             continue
-        b = min(b, max(a + 0.08, dur - 0.05))
+        if a >= save_a - 0.05:
+            continue
+        b = min(b, save_a - 0.05)
+        if b <= a:
+            continue
         safe = txt.replace("\\", " ").replace("'", "").replace(":", " -")[:22]
         parts.append(
-            f"drawtext=text='{safe}':fontcolor=white:fontsize=78:"
+            f"drawtext={font}text='{safe}':fontcolor=white:fontsize=78:"
             f"borderw=8:bordercolor=0x001033:"
             f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
             f"x=(w-text_w)/2:y=h-360:enable='between(t,{a:.2f},{b:.2f})'"
         )
     parts.append(
-        f"drawtext=text='SAVE':fontcolor=white:fontsize=110:"
-        f"borderw=10:bordercolor=0x001033:"
-        f"shadowcolor=black@0.9:shadowx=4:shadowy=4:"
-        f"x=(w-text_w)/2:y=h-520:enable='between(t,{save_a:.2f},{save_b:.2f})'"
+        f"drawtext={font}text='SAVE':fontcolor=white:fontsize=120:"
+        f"borderw=12:bordercolor=0x001033:"
+        f"shadowcolor=black@0.95:shadowx=5:shadowy=5:"
+        f"x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,{save_a:.2f},{save_b:.2f})'"
     )
     parts.append(
-        f"drawtext=text='HIT FOLLOW':fontcolor=white:fontsize=92:"
-        f"borderw=10:bordercolor=0x001033:"
-        f"shadowcolor=black@0.9:shadowx=4:shadowy=4:"
-        f"x=(w-text_w)/2:y=h-520:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
+        f"drawtext={font}text='HIT FOLLOW':fontcolor=white:fontsize=96:"
+        f"borderw=12:bordercolor=0x001033:"
+        f"shadowcolor=black@0.95:shadowx=5:shadowy=5:"
+        f"x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
     )
     if req_has_code:
         raw_req = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
@@ -619,15 +680,14 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         cm = re.search(r"(?:use code|promo code)\s*[:\-]?\s*([A-Za-z0-9]{3,16})", raw_req, re.I)
         if cm:
             code = cm.group(1)
-        ca, cb = _word_hit({"code"}, (max(0.0, dur - 3.2), max(0.8, dur - 2.4)))
         parts.append(
-            f"drawtext=text='Use code {code}':fontcolor=white:fontsize=68:"
+            f"drawtext={font}text='Use code {code}':fontcolor=white:fontsize=68:"
             f"borderw=8:bordercolor=0x001033:"
-            f"x=(w-text_w)/2:y=h-300:enable='between(t,{ca:.2f},{cb:.2f})'"
+            f"x=(w-text_w)/2:y=h-300:enable='between(t,{max(0.0, save_a-1.4):.2f},{save_a:.2f})'"
         )
     caption_vf = ",".join(parts) if parts else "null"
     draw = caption_vf
-    print(f"[caption] karaoke={len(karaoke)} save={save_a:.1f}-{save_b:.1f} follow={follow_a:.1f}-{follow_b:.1f}")
+    print(f"[caption] karaoke={len(karaoke)} SAVE {save_a:.1f}-{save_b:.1f} FOLLOW {follow_a:.1f}-{follow_b:.1f}")
     en = f"gte(t,{end_at:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
