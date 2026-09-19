@@ -105,6 +105,7 @@ jobs:
           ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
           WHOP_ENABLE_DISCOVER: "1"
+          VYRO_SKIP_UPLOAD: "1"
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact
