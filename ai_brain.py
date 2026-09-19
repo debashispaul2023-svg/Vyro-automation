@@ -63,7 +63,113 @@ def _model(api_key: str) -> "genai.GenerativeModel":
     return genai.GenerativeModel(MODEL_NAME)
 
 
-def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
+def _extract_json_blob(text: str) -> str:
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", (text or "").strip())
+    start = raw.find("{")
+    if start < 0:
+        return raw
+    depth = 0
+    in_str = False
+    esc = False
+    for i, ch in enumerate(raw[start:], start=start):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start : i + 1]
+    return raw[start:]
+
+
+def _repair_json(blob: str) -> str:
+    s = (blob or "").strip()
+    if not s:
+        return "{}"
+    # drop trailing commas before ] or }
+    s = re.sub(r",(\s*[}\]])", r"\1", s)
+    # close an open string
+    quotes = 0
+    esc = False
+    in_str = False
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                quotes += 1
+            continue
+        if ch == '"':
+            in_str = True
+            quotes += 1
+    if in_str:
+        s += '"'
+    # close open arrays / objects
+    opens = s.count("[") - s.count("]")
+    if opens > 0:
+        s += "]" * opens
+    opens = s.count("{") - s.count("}")
+    if opens > 0:
+        s += "}" * opens
+    return s
+
+
+def _salvage_fields(blob: str) -> dict:
+    out: dict = {}
+    for key in ("mandatory_hashtags", "required_links", "hashtags", "ranked_names"):
+        m = re.search(rf'"{key}"\s*:\s*\[(.*?)\]', blob, re.S)
+        if not m:
+            continue
+        items = re.findall(r'"([^"\\]*)"', m.group(1))
+        out[key] = items
+    for key in ("title", "description", "instagram_caption", "notes", "reason",
+                "speak_text", "cta_text", "end_title", "referral_code", "watermark_text"):
+        m = re.search(rf'"{key}"\s*:\s*"([^"]*)"', blob)
+        if m:
+            out[key] = m.group(1)
+        elif re.search(rf'"{key}"\s*:\s*null', blob):
+            out[key] = None
+    for key in ("min_seconds", "max_seconds"):
+        m = re.search(rf'"{key}"\s*:\s*([0-9.]+)', blob)
+        if m:
+            out[key] = float(m.group(1))
+    for key in ("is_good", "need_captions", "need_spoken_voice", "need_end_icon",
+                "need_quality_boost", "ready_to_upload"):
+        m = re.search(rf'"{key}"\s*:\s*(true|false)', blob, re.I)
+        if m:
+            out[key] = m.group(1).lower() == "true"
+    return out
+
+
+def _loads_json(text: str) -> dict:
+    blob = _extract_json_blob(text)
+    for candidate in (blob, _repair_json(blob)):
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    salvaged = _salvage_fields(blob)
+    if salvaged:
+        print("[gemini] repaired truncated JSON")
+        return salvaged
+    raise json.JSONDecodeError("unrepairable", blob[:80], 0)
+
+
+def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
     """Sends a prompt to Gemini requesting a strict JSON response, and
     parses it. Raises AIBrainError on any failure (network, bad JSON,
     empty response, etc) so callers can fall back to non-AI logic."""
@@ -81,7 +187,7 @@ def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
                     generation_config=genai.types.GenerationConfig(
                         response_mime_type="application/json",
                         max_output_tokens=max_output_tokens,
-                        temperature=0.4,
+                        temperature=0.2,
                     ),
                 )
                 text = response.text
@@ -92,9 +198,6 @@ def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
                 last_exc = exc
                 msg = str(exc)
                 print(f"[gemini] key #{i}/{len(keys)} failed: {msg[:160]}")
-                if "429" not in msg and "quota" not in msg.lower() and i < len(keys):
-                    # still try next key; quota is the main reason to rotate
-                    continue
                 if i < len(keys):
                     continue
         else:
@@ -109,11 +212,10 @@ def _call_json(prompt: str, max_output_tokens: int = 1024) -> dict:
     if not text:
         raise AIBrainError("Gemini returned an empty response.")
 
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
     try:
-        return json.loads(cleaned)
+        return _loads_json(text)
     except json.JSONDecodeError as exc:
-        raise AIBrainError(f"Could not parse Gemini's JSON response: {exc}\nRaw: {text}") from exc
+        raise AIBrainError(f"Could not parse Gemini's JSON response: {exc}\nRaw: {text[:400]}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +252,8 @@ Respond with ONLY a JSON object matching exactly this shape:
 }}
 
 If a field isn't mentioned, use a sensible default (empty list, 15/60 for \
-duration, null for optional strings).
+duration, null for optional strings). Keep notes under 12 words. Do not \
+write long strings. Close every array and object.
 
 Requirements text:
 \"\"\"
@@ -159,20 +262,49 @@ Requirements text:
 """
 
 
+def _regex_requirements(raw_text: str) -> ParsedRequirements:
+    text = raw_text or ""
+    tags = re.findall(r"#\w+", text)
+    links = re.findall(r"https?://[^\s)\]>\"']+", text)
+    code = None
+    m = re.search(r"(?:code|use code)\s*[:\-]?\s*([A-Z0-9]{3,20})", text, re.I)
+    if m:
+        code = m.group(1)
+    return ParsedRequirements(
+        mandatory_hashtags=list(dict.fromkeys(tags)),
+        required_links=list(dict.fromkeys(links))[:8],
+        min_seconds=15.0,
+        max_seconds=30.0,
+        referral_code=code,
+        watermark_text=None,
+        notes="regex fallback",
+    )
+
+
 def ai_parse_requirements(raw_text: str) -> ParsedRequirements:
     if not raw_text or not raw_text.strip():
         raise AIBrainError("Empty requirements text.")
 
-    data = _call_json(_REQUIREMENTS_PROMPT.format(text=raw_text[:6000]))
+    try:
+        data = _call_json(_REQUIREMENTS_PROMPT.format(text=raw_text[:3500]), max_output_tokens=512)
+    except AIBrainError as exc:
+        print(f"[gemini] parse fallback ({exc})")
+        return _regex_requirements(raw_text)
 
+    tags = data.get("mandatory_hashtags") or []
+    if not isinstance(tags, list):
+        tags = []
+    links = data.get("required_links") or []
+    if not isinstance(links, list):
+        links = []
     return ParsedRequirements(
-        mandatory_hashtags=[h if h.startswith("#") else f"#{h}" for h in data.get("mandatory_hashtags", [])],
-        required_links=list(data.get("required_links", [])),
+        mandatory_hashtags=[h if str(h).startswith("#") else f"#{h}" for h in tags if h],
+        required_links=[str(x) for x in links if x],
         min_seconds=float(data.get("min_seconds", 15.0) or 15.0),
-        max_seconds=float(data.get("max_seconds", 60.0) or 60.0),
+        max_seconds=float(data.get("max_seconds", 30.0) or 30.0),
         referral_code=data.get("referral_code") or None,
         watermark_text=data.get("watermark_text") or None,
-        notes=data.get("notes", "") or "",
+        notes=(data.get("notes") or "")[:240],
     )
 
 
