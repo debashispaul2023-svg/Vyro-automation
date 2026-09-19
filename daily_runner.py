@@ -319,7 +319,53 @@ def _stitch_official_clips(clips: list[dict], dest_path: str) -> str:
         check=True, capture_output=True, timeout=120,
     )
     print(f"[merge] wrote {dest_path} from {len(parts)} clips")
+    _cap_video_length(dest_path, max_seconds=30.0, speed=1.2)
     return dest_path
+
+
+def _probe_seconds(path: str) -> float:
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=20,
+        )
+        return float((probe.stdout or "0").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _cap_video_length(path: str, max_seconds: float = 30.0, speed: float = 1.2) -> None:
+    """Keep shorts <= 30s. Speed 1.2x first, then hard trim."""
+    if not os.path.isfile(path):
+        return
+    dur = _probe_seconds(path)
+    if dur <= 0 or dur <= max_seconds + 0.15:
+        print(f"[cap] {path} already {dur:.1f}s")
+        return
+    work = path + ".cap.mp4"
+    use_speed = dur > max_seconds and speed and speed > 1.0
+    ff = ["ffmpeg", "-y", "-i", path]
+    if use_speed:
+        ff += [
+            "-filter_complex",
+            f"[0:v]setpts=PTS/{speed}[v];[0:a]atempo={speed}[a]",
+            "-map", "[v]", "-map", "[a]",
+        ]
+        print(f"[cap] {dur:.1f}s -> {speed}x then trim {max_seconds:.0f}s")
+    else:
+        print(f"[cap] trim {dur:.1f}s to {max_seconds:.0f}s")
+    ff += ["-t", str(max_seconds), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-c:a", "aac", "-ar", "44100", work]
+    try:
+        subprocess.run(ff, check=True, capture_output=True, timeout=180)
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, path)
+            print(f"[cap] wrote {path} ({_probe_seconds(path):.1f}s)")
+    except Exception as exc:
+        print(f"[cap] failed: {exc}")
+        if os.path.isfile(work):
+            os.remove(work)
 
 
 def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
@@ -904,7 +950,9 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             fallback_caption_text=cap or None,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
+        _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
         _apply_requirement_tools(campaign, OUTPUT_PATH)
+        _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")
