@@ -1137,15 +1137,16 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
         )
 
     ig_url = _instagram_permalink(str(instagram_media_id or ""))
-    submit_url = ig_url or (youtube_url or "").strip()
-    if submit_url and "youtube.com/watch" in submit_url and "v=" not in submit_url:
-        print(f"[submit] refusing broken YouTube URL: {submit_url}")
-        submit_url = ""
-    if ig_url:
-        print(f"[6/5] Auto-submitting Instagram FIRST: {ig_url}")
-    elif submit_url:
-        print(f"[6/5] No IG permalink — falling back to YouTube: {submit_url}")
-    if submit_url:
+    yt_url = (youtube_url or "").strip()
+    if yt_url and "youtube.com/watch" in yt_url and "v=" not in yt_url:
+        print(f"[submit] refusing broken YouTube URL: {yt_url}")
+        yt_url = ""
+    submit_urls = [u for u in (ig_url, yt_url) if u]
+    if not submit_urls:
+        print("[6/5] Nothing public to auto-submit.")
+    for submit_url in submit_urls:
+        kind = "Instagram" if "instagram.com" in submit_url else "YouTube"
+        print(f"[6/5] Auto-submitting {kind}: {submit_url}")
         try:
             _submit_back(platform, campaign, submit_url)
             print(f"Submitted {submit_url} to {platform} campaign '{campaign.campaign_id}'.")
@@ -1155,8 +1156,6 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
                 f"SUBMIT THIS URL MANUALLY: {submit_url}",
                 file=sys.stderr,
             )
-    else:
-        print("[6/5] Nothing public to auto-submit.")
 
     if instagram_media_id or youtube_url:
         return 0
