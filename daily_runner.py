@@ -992,8 +992,16 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
     blob = f"{hook}\n{summary}".lower()
     if "tongue" in blob:
         print("[meta] Tongue lock — official campaign wording only")
+        n = len((_load_clip_log().get("clips") or []))
+        titles = [
+            "Your tongue keeps GROWING in this Roblox game — +1 Tongue Escape #shorts",
+            "Don't fall. The tongue gets longer — +1 Tongue Escape #shorts",
+            "This Roblox parkour tongue game is actually crazy — +1 Tongue Escape #shorts",
+            "Stage after stage the tongue grows — +1 Tongue Escape #shorts",
+            "I found a Roblox game where your tongue is the path — +1 Tongue Escape #shorts",
+        ]
         return VideoMetadata(
-            title="This Roblox tongue game is actually crazy — +1 Tongue Escape #shorts",
+            title=titles[n % len(titles)],
             description=(
                 "Your tongue keeps growing while you escape.\n"
                 "Game is called +1 Tongue Escape on Roblox.\n"
