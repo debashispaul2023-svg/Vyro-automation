@@ -116,11 +116,16 @@ jobs:
           path: output/short.mp4
           if-no-files-found: ignore
 
-      - name: Commit updated processed_campaigns.json
+      - name: Commit updated processed_clips.json
         if: always()
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          git add processed_campaigns.json processed_clips.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update processed clips [skip ci]"
-          git push || true
+          git add processed_clips.json processed_campaigns.json
+          git status
+          if git diff --staged --quiet; then
+            echo "No clip-log changes to commit"
+          else
+            git commit -m "Update processed clips [skip ci]"
+            git push
+          fi
