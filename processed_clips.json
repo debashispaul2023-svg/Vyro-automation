@@ -36,6 +36,34 @@
       "name": "04_Clip 4.mp4",
       "url": "https://drive.google.com/file/d/1RoR0QcP1DQTuubnH4Tpnob_MwG7SW73C/view",
       "kind": "drive_file"
+    },
+    {
+      "campaign_id": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+      "clip_id": "1lBAJk7kAnVPoc4Kh6W4f-V8mPO3lEphK",
+      "name": "01_Clip 1 (1).mp4",
+      "url": "https://drive.google.com/file/d/1lBAJk7kAnVPoc4Kh6W4f-V8mPO3lEphK/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+      "clip_id": "1UfnrPpUhTgkq9Qm0pcoh4m_Q23f5JOSi",
+      "name": "02_Clip 2.mp4",
+      "url": "https://drive.google.com/file/d/1UfnrPpUhTgkq9Qm0pcoh4m_Q23f5JOSi/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+      "clip_id": "1mWr41Y70BaVFhGrj696Ms_UInrWo3YYM",
+      "name": "03_Clip 3 (2).mp4",
+      "url": "https://drive.google.com/file/d/1mWr41Y70BaVFhGrj696Ms_UInrWo3YYM/view",
+      "kind": "drive_file"
+    },
+    {
+      "campaign_id": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+      "clip_id": "1J29fm0eyKXUGQ4dRcelxBwbx9P7vPWvL",
+      "name": "05_Clip 5.mp4",
+      "url": "https://drive.google.com/file/d/1J29fm0eyKXUGQ4dRcelxBwbx9P7vPWvL/view",
+      "kind": "drive_file"
     }
   ]
 }
