@@ -147,16 +147,18 @@ def _save_clip_log(log: dict) -> None:
         json.dump(log, f, indent=2)
 
 
-def _clip_already_used(log: dict, campaign_id: str, clip_id: str) -> bool:
-    """Skip a file if this Drive id was already rendered, any campaign name."""
+def _clip_already_used(log: dict, campaign_id: str, clip_id: str, name: str = "") -> bool:
+    """Skip a file if this Drive id or clip name was already rendered."""
     reuse = (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes")
     if reuse:
         return False
     cid = (clip_id or "").strip()
-    if not cid:
-        return False
+    nm = (name or "").strip().lower()
     for row in log.get("clips") or []:
-        if (row.get("clip_id") or "").strip() == cid:
+        if cid and (row.get("clip_id") or "").strip() == cid:
+            return True
+        used_name = (row.get("name") or "").strip().lower()
+        if nm and used_name and used_name == nm:
             return True
     return False
 
@@ -256,7 +258,7 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
     clips = _list_campaign_clips(campaign)
     unused = [
         c for c in clips
-        if not _clip_already_used(log, campaign.campaign_id, c["clip_id"])
+        if not _clip_already_used(log, campaign.campaign_id, c["clip_id"], c.get("name") or "")
         and c.get("kind") in ("drive_file", "direct")
     ]
     def _ms(c):
@@ -378,7 +380,7 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     unused = [
         clip
         for clip in clips
-        if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"])
+        if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"], clip.get("name") or "")
     ]
     if not unused:
         print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
@@ -392,12 +394,6 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         except (TypeError, ValueError):
             ms = 0
         if ms >= 10000:
-            try:
-                sz = int(c.get("size_bytes") or c.get("size") or 0)
-            except (TypeError, ValueError):
-                sz = 0
-            if sz and sz > 90_000_000:
-                continue
             long_enough.append(c)
     if long_enough:
         print(f"[clips] dropped {len(pool) - len(long_enough)} clips under 10s")
@@ -1241,6 +1237,7 @@ def main() -> int:
                 {
                     "campaign_id": campaign.campaign_id,
                     "clip_id": piece["clip_id"],
+                    "name": piece.get("name", ""),
                     "url": piece.get("url", ""),
                     "kind": piece.get("kind", ""),
                 }
