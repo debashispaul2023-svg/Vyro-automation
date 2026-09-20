@@ -4,7 +4,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test-flow:
@@ -51,10 +51,17 @@ jobs:
           WHOP_ENABLE_DISCOVER: "1"
         run: python test_campaign_flow.py
 
-      - name: Upload test render
+      - name: Publish raw short.mp4
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-flow-short
-          path: output/short.mp4
-          if-no-files-found: warn
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if [ ! -f output/short.mp4 ]; then
+            echo "no output/short.mp4"
+            exit 0
+          fi
+          gh release view test-flow-latest >/dev/null 2>&1 || \
+            gh release create test-flow-latest --prerelease --title "test-flow-latest" --notes "Direct MP4 from last TEST run. Not a zip."
+          gh release upload test-flow-latest output/short.mp4 --clobber
+          echo "RAW_MP4=https://github.com/${GITHUB_REPOSITORY}/releases/download/test-flow-latest/short.mp4"
