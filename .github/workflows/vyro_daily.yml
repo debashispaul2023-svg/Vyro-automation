@@ -2,10 +2,11 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    # 3x daily, US Eastern (EDT = UTC-4)
-    - cron: "0 15 * * *"  # 11:00 AM ET — lunch Reels
-    - cron: "0 20 * * *"  # 4:00 PM ET — after-school gaming
-    - cron: "0 23 * * *"  # 7:00 PM ET — prime evening Reels/Shorts
+    # USA audience, US Eastern. Cron is UTC. EDT = UTC-4 (Mar–Nov).
+    # Reels peak: lunch + 6–9 PM. Shorts peak: afternoon + 6–9 PM.
+    - cron: "0 16 * * *"  # 12:00 PM ET — US lunch scroll (East lunch / Central late morning)
+    - cron: "0 21 * * *"  #  5:00 PM ET — after-school + after-work (East evening start / Pacific lunch)
+    - cron: "0 0 * * *"   #  8:00 PM ET — prime Reels/Shorts night (East prime / Central 7 PM / Pacific 5 PM)
   workflow_dispatch: {}
 
 permissions:
@@ -14,7 +15,7 @@ permissions:
 jobs:
   check-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
