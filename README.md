@@ -1,260 +1,192 @@
-# Vyro Campaign Automation Engine
+# Vyro-automation
 
-## রিপো স্ট্রাকচার
+Daily GitHub Actions bot that finds a **BloxClips / Whop** campaign, reads the brief, merges Drive footage, burns captions + ElevenLabs voice + end stickers, uploads **Instagram first** then YouTube backup, and auto-submits both links on Whop.
 
-```
-.
-├── requirements_parser.py
-├── renderer.py
-├── metadata.py
-├── checker.py
-├── youtube_uploader.py
-├── generate_youtube_token.py
-├── vyro_client.py              ← NEW: Vyro লগইন/স্ক্র্যাপ/সাবমিট (Playwright)
-├── daily_runner.py             ← NEW: পুরো 100% automation-এর entrypoint
-├── main.py                     (ম্যানুয়াল/টেস্ট রানের জন্য এখনো কাজ করে)
-├── processed_campaigns.json    ← NEW: কোন ক্যাম্পেইন সাবমিট হয়ে গেছে তার লগ
-├── requirements.txt
-├── campaign.json                (fallback/টেস্ট ডেটা, daily_runner এটা ব্যবহার করে না)
-└── .github/workflows/
-    ├── vyro_pipeline.yml        (পুরনো: ম্যানুয়াল ট্রিগার)
-    └── vyro_daily.yml           ← NEW: প্রতিদিন cron দিয়ে ফুল অটোমেশন
+Instagram is the main platform. YouTube is backup / second submit.
 
-```
+Repo: `debashispaul2023-svg/Vyro-automation`
 
-## ⚠️ ধাপ ০ (বাধ্যতামূলক): Vyro সেশন কুকি বের করা
+---
 
-Vyro-তে পাসওয়ার্ড নেই — লগইন করতে ইমেইলে OTP আসে, তাই email+password bot দিয়ে
-automate করা যায় না। এর বদলে আমরা তোমার **লগইন সেশন কুকি** (`vyro_sid`) একবার
-ম্যানুয়ালি বের করে GitHub Secret-এ রাখব — বট রোজ এই কুকি দিয়েই সরাসরি
-লগইন হয়ে যাবে, নতুন করে OTP লাগবে না।
+## What a Daily run does
 
-**যেভাবে বের করবে (ফোন থেকেই সম্ভব, Kiwi Browser দিয়ে):**
-1. Play Store থেকে **Kiwi Browser** ইনস্টল করো (এটাতে ডেস্কটপ Chrome-এর মতো DevTools আছে)
-2. Kiwi দিয়ে `app.vyro.com` খুলে normal OTP দিয়ে লগইন করে dashboard-এ ঢোকো
-3. উপরে **⋮ মেনু → Developer tools**
-4. DevTools-এর ট্যাব বারে **"Application"** ট্যাবে যাও
-5. বামপাশে **Storage → Cookies → https://app.vyro.com**-এ ট্যাপ করো
-6. তালিকায় **`vyro_sid`** নামের কুকি খুঁজে বের করো, তার **Value**-এর উপর ট্যাপ করে ধরে রেখে **পুরো (untruncated) মান কপি করো**
-7. GitHub রিপোর **Settings → Secrets and variables → Actions**-এ গিয়ে নতুন secret বানাও:
-   - Name: `VYRO_SESSION_COOKIE`
-   - Value: কপি করা `vyro_sid`-এর মান
+1. Open BloxClips board  
+   `https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/`
+2. Pick one allowed campaign (never ForgeGUI).
+3. Read campaign requirements from the page + Google Doc.
+4. List videos in that campaign’s Drive folder only.
+5. Merge unused clips (max ~30s; 1.2x speed if needed).
+6. AI decides tools from **this campaign’s rules** (voice, CTA, icon, captions).
+7. Render 1080×1920 short.
+8. Upload Instagram Reels (main) + YouTube unlisted (backup).
+9. Auto-submit **both** URLs on that same campaign’s Submit form.
+10. Mark used clips in `processed_clips.json` so they are not reused.
 
-**গুরুত্বপূর্ণ:** এই সেশন সাধারণত কয়েক সপ্তাহ/মাস কাজ করবে। মেয়াদ শেষ হলে
-workflow লগে **"Vyro session expired"** এরর দেখাবে — তখন এই ধাপগুলো আবার
-রিপিট করে শুধু secret-টা আপডেট করলেই চলবে, কোড বদলাতে হবে না।
+One run = one campaign = one clip pack. Never submit campaign A’s video to campaign B.
 
-আগে যদি `VYRO_EMAIL` / `VYRO_PASSWORD` নামে secret বানিয়ে থাকো, ওগুলো এখন আর
-ব্যবহার হয় না — চাইলে মুছে ফেলতে পারো (রেখে দিলেও ক্ষতি নেই)।
+---
 
-## ⚠️ পরের ধাপ: বাকি Vyro সিলেক্টর বের করা
+## Hard rules
 
-`vyro_client.py`-তে যেসব লাইনে `# TODO` কমেন্ট আছে, ওগুলো placeholder — আমি
-তোমার লগইন করা Vyro ড্যাশবোর্ড নিজে দেখতে পারি না, তাই আসল HTML স্ট্রাকচার
-জানি না। একবার নিজে বের করে দিতে হবে:
+- Skip **ForgeGUI**. Never join or submit it.
+- Allowed names: **+1 Tongue Escape**, **Steal A Seed**, **World Athletics**, **How to Fisch**.
+- How to Fisch footage folder is **only** for How to Fisch:  
+  `https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD`
+- Do not mix Drive folders across campaigns.
+- Close / skip a campaign when **≥90% budget used**.
+- Follow the campaign brief. If the brief does not ask for a code, do not talk about codes.
+- Spoken game name + CTA come from the brief.
+- End of video only: **SAVE** sticker, then **HIT FOLLOW** sticker, plus large game-icon thumbnail.
+- Karaoke captions: white text, dark navy outline, word-by-word. Not a sentence stuck on screen the whole time.
+- Voice = **ElevenLabs only**. No espeak fallback. Energetic. Body first, “Save. Hit follow.” pinned to the last ~2.5s.
+- Max length ~30 seconds.
+- Auto-upload + auto-submit stay **ON** in Daily. Test workflow keeps uploads off.
 
-1. ফোন/কম্পিউটারে Chrome দিয়ে `app.vyro.com`-এ লগইন করো
-2. যে ইনপুট বক্স/বাটন দরকার (email/password/submit/campaign card/video-url
-   input) — তার উপর **Inspect** বা **Inspect Element** চাপো
-3. হাইলাইট হওয়া HTML ট্যাগে right-click → **Copy → Copy selector**
-4. `vyro_client.py`-এর সংশ্লিষ্ট `# TODO` লাইনে ওই selector বসাও
+---
 
-সহজ না লাগলে, ঐ পেজগুলোর HTML (Ctrl+U বা "View Page Source" / DevTools →
-Elements ট্যাবের স্ক্রিনশট) আমাকে পাঠালে আমি নিজেই সঠিক selector বসিয়ে দেব।
+## Current campaigns (`whop_campaigns.json`)
 
-## ধাপ ১: YouTube OAuth টোকেন বানানো (একবারই, নিজের কম্পিউটারে)
+Board (all cards live here):  
+`https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/`
 
-GitHub Actions-এ ব্রাউজার লগইন সম্ভব না, তাই এই ধাপটা লোকালি একবার করতে হবে:
+| Campaign | UUID | Footage |
+|---|---|---|
+| +1 Tongue Escape | `ce2f887e-f54d-43b0-a2b9-e8da505f7b7a` | Drive folder in JSON |
+| How to Fisch | `b59bb70c-58bf-44c1-9e44-0b54c59d90f4` | `15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD` |
+| Steal A Seed | (open from board; add UUID + Drive when known) | — |
+| World Athletics | (open from board; add UUID + Drive when known) | — |
 
-1. https://console.cloud.google.com/apis/credentials -এ যান, একটা প্রজেক্ট বানান
-2. "YouTube Data API v3" enable করুন
-3. **Create Credentials → OAuth client ID → Application type: Desktop app**
-4. ডাউনলোড করা JSON ফাইলটা রিপোর root-এ `client_secrets.json` নামে রাখুন (এই ফাইল **কখনো** GitHub-এ পুশ করবেন না — `.gitignore`-এ যোগ করুন)
-5. রান করুন:
+When a new BloxClips card appears: bot should open it from the board, read the Doc, find the Drive/MediaSilo link, and work it. Do **not** ask the user for the Doc URL every time.
+
+---
+
+## Files
+
+| File | Job |
+|---|---|
+| `daily_runner.py` | Orchestrator: pick campaign → merge → pack → upload → submit |
+| `whop_client.py` | Playwright login (cookie), board harvest, campaign detail, **Submit clip** form |
+| `whop_campaigns.json` | Allowed names, UUIDs, Drive / Doc / game links |
+| `google_doc_reader.py` | Doc text + Drive / file / MediaSilo link resolver |
+| `ai_brain.py` | Requirements parse + clip rank (Gemini, multi-key) |
+| `tts_engine.py` | ElevenLabs voice + word timings |
+| `renderer.py` | Vertical crop / quality helpers |
+| `instagram_uploader.py` | Graph Reels upload via public GitHub-release asset URL |
+| `processed_clips.json` | Used clip IDs per campaign |
+| `.github/workflows/vyro_daily.yml` | Daily job, 3× US peak |
+| `.github/workflows/test_campaign_flow.yml` | Test: generate video, **no upload** |
+
+---
+
+## Whop submit UI (must match this)
+
+Campaign detail → orange **Submit clip** → sheet **Submit video link**:
+
+1. Paste IG or YouTube URL in the box (`https://www.tiktok.com/@username/...` placeholder).
+2. Tick:
+   - Posted from one of your linked accounts
+   - Not already submitted to this campaign
+   - Posted within the last 30 minutes
+3. Tick: I’ve read the requirements…
+4. Orange **Submit clip** (not Cancel).
+
+Submit must open `/campaigns/<uuid>`, not the grid `/campaigns`. Ignore hCaptcha iframes.
+
+If submit still fails, log will say `SUBMIT THIS URL MANUALLY:` plus the IG/YouTube links.
+
+---
+
+## Video pack (end of short)
+
+- Karaoke words during gameplay (white + `#001033` outline).
+- Last ~2.6s: lime **SAVE** box + spoken “Save.”
+- Last ~1.3s: yellow **HIT FOLLOW** box + spoken “Hit follow.”
+- Last ~3s: large game-icon thumbnail (~820px, white pad) at the bottom.
+- Gameplay audio stays low under the voice.
+
+---
+
+## Workflows
+
+### Daily — `vyro_daily.yml`
+
+Runs automatically (UTC cron, US Eastern):
+
+| UTC | US Eastern | Why |
+|---|---|---|
+| `0 16 * * *` | 12:00 PM ET | Lunch Reels |
+| `0 21 * * *` | 5:00 PM ET | After school / work |
+| `0 0 * * *` | 8:00 PM ET | Prime Reels / Shorts |
+
+Also: Actions → Vyro Daily Full Automation → Run workflow.
+
+Timeout: 70 minutes.
+
+### Test — `test_campaign_flow.yml`
+
+Same harvest + render. Uploads and Whop submit **off**. Artifact should be raw `short.mp4` (GitHub Release `test-flow-latest`), not a zip.
+
+---
+
+## GitHub secrets
+
+| Secret | Use |
+|---|---|
+| `WHOP_COOKIE_HEADER` | Full Whop `Cookie:` header |
+| `GOOGLE_DRIVE_API_KEY` | List / download Drive clips |
+| `GEMINI_API_KEY` | Requirements + clip rank (`key1,key2,key3` ok) |
+| `ELEVENLABS_API_KEY` | Voice |
+| `IG_ACCESS_TOKEN` | Instagram Graph |
+| `IG_BUSINESS_ACCOUNT_ID` | IG account |
+| `ASSET_HOST_REPO` | `owner/public-repo` for public MP4 URL |
+| `ASSET_HOST_TOKEN` | PAT that can create releases on that repo |
+| `YOUTUBE_TOKEN_JSON` | OAuth token.json (Desktop or TV client) |
+
+Optional: `VYRO_SESSION_COOKIE` only if Vyro.com path is used.
+
+---
+
+## Local / Actions command
 
 ```bash
-pip install -r requirements.txt
-python generate_youtube_token.py
+python daily_runner.py
 ```
 
-ব্রাউজার খুলবে, আপনার YouTube অ্যাকাউন্টে লগইন করে অনুমতি দিন। এতে `token.json` তৈরি হবে।
-
-6. এই টোকেনটা GitHub Secret হিসেবে সেভ করুন:
+Test (no upload):
 
 ```bash
-base64 -w0 token.json   # Mac হলে: base64 -i token.json
+python test_campaign_flow.py
 ```
 
-আউটপুটটা কপি করে GitHub রিপোর **Settings → Secrets and variables → Actions → New repository secret** এ যোগ করুন, নাম দিন: `YOUTUBE_TOKEN_B64`।
+---
 
-> `token.json` এবং `client_secrets.json` — দুটোই `.gitignore`-এ রাখুন, কখনো রিপোতে কমিট করবেন না।
+## Known failure modes
 
-## ধাপ ২: লোকাল রান (নিজের কম্পিউটারে)
+| Symptom | Cause | Fix |
+|---|---|---|
+| Brief is only “Search / Campaigns / $0.00” | Bot read Whop chrome, not iframe | Open `apps.whop.com` iframe, then `/campaigns/<uuid>` |
+| Always opens How to Fisch | Grid click by name failed | Use UUID map in `whop_client.py` |
+| Submit: no URL box | Still on campaigns **grid** | `_goto_campaign_detail` then Submit clip |
+| Voice ends before Save/Follow | CTA not mixed at video end | Body + delayed CTA audio, no `-shortest` |
+| Same clip again | Log not written | `processed_clips.json` commit in Daily |
+| Gemini 429 / broken JSON | Quota / truncated JSON | Rotate keys + salvage parser in `ai_brain.py` |
+| IG 403 on release | PAT cannot create releases | `ASSET_HOST_TOKEN` needs `contents: write` on public repo |
+| Job cancelled ~45m | Render + 3 submit retries | Timeout is 70m now; keep submit retries short |
 
-```bash
-# ffmpeg + imagemagick (Ubuntu/Debian উদাহরণ)
-sudo apt-get install -y ffmpeg imagemagick
+---
 
-python main.py \
-  --campaign campaign.json \
-  --source input_16x9.mp4 \
-  --output output/short.mp4 \
-  --hook "He gave away $100,000 in 60 seconds" \
-  --summary "Clipped from the original livestream." \
-  --privacy unlisted
-```
+## Do not
 
-রান শেষে টার্মিনালে ও `video_url.txt` ফাইলে ভিডিওর YouTube URL পাবেন।
+- Mix How to Fisch clips into Tongue Escape / Steal A Seed / World Athletics.
+- Submit a clip to a different campaign than the one that produced it.
+- Enable Discover auto-join unless `WHOP_ENABLE_DISCOVER=1`.
+- Put client secrets, tokens, or cookies in the repo.
+- Use ForgeGUI.
 
-## ধাপ ৩: GitHub Actions দিয়ে রান করা
+---
 
-1. সব ফাইল রিপোতে পুশ করুন (`token.json`/`client_secrets.json` বাদে)
-2. `YOUTUBE_TOKEN_B64` secret সেট করা আছে কিনা নিশ্চিত করুন (উপরের ধাপ ১)
-3. **Actions** ট্যাব → **Vyro Campaign Pipeline** → **Run workflow**, ইনপুট দিন:
-   - `source_video_url`, `campaign_json_path`, `hook`, `summary`, `privacy` (public/unlisted/private)
-4. রান শেষে:
-   - **Job Summary**-তে ভিডিও URL সরাসরি দেখা যাবে
-   - **Artifacts** থেকে `video-url` (txt ফাইল) ও `vyro-short` (রেন্ডার করা mp4) ডাউনলোড করা যাবে
+## Owner notes
 
-## ধাপ ৪: Vyro-তে সাবমিট (ম্যানুয়াল)
-
-Vyro-র কোনো পাবলিক সাবমিশন API নেই — তারা শুধু ওয়েব ড্যাশবোর্ডে লগইন করে ম্যানুয়ালি clip URL সাবমিট করার সিস্টেম রেখেছে। তাই:
-
-1. উপরের URL (job summary/artifact থেকে) কপি করুন
-2. Vyro ড্যাশবোর্ডে গিয়ে সংশ্লিষ্ট ক্যাম্পেইনে লগইন করুন
-3. URL পেস্ট করে নিজে সাবমিট করুন
-
-এটা ইচ্ছাকৃতভাবে manual রাখা হয়েছে, কারণ Vyro-র সাইটে bot দিয়ে অটো-লগইন/ফর্ম-সাবমিট করানো তাদের Terms of Service ভঙ্গ করতে পারে।
-
-## ধাপ ৫: ফুল ১০০% অটোমেশন সেটআপ (`daily_runner.py`)
-
-এই ফ্লো: **Vyro চেক → ক্যাম্পেইন থাকলে রিকোয়ারমেন্ট + সোর্স ক্লিপ স্ক্র্যাপ →
-ডাউনলোড → এডিট/রেন্ডার → YouTube আপলোড → Vyro-তে লিংক অটো-সাবমিট**, প্রতিদিন
-নিজে থেকে চলবে GitHub Actions cron দিয়ে।
-
-1. উপরের **ধাপ ০** এবং **ধাপ ১** (YouTube token) আগে শেষ করো
-2. GitHub রিপোর **Settings → Secrets and variables → Actions**-এ এই secret গুলো যোগ করো:
-   - `VYRO_SESSION_COOKIE` — তোমার Vyro-র `vyro_sid` কুকির মান (উপরে "ধাপ ০"-এ যেভাবে বের করেছ)
-   - `YOUTUBE_TOKEN_JSON` — `token.json` ফাইলের পুরো কন্টেন্ট (সরাসরি JSON, base64 লাগবে না)
-3. `.github/workflows/vyro_daily.yml` ফাইলে `cron: "0 6 * * *"` — চাইলে সময় বদলাও ([crontab.guru](https://crontab.guru) দিয়ে সহজে বানানো যায়)
-4. রিপোতে সব ফাইল পুশ করো (`token.json`/`client_secrets.json` ছাড়া)
-5. **Actions → Vyro Daily Full Automation → Run workflow** দিয়ে প্রথমবার ম্যানুয়ালি টেস্ট করো
-6. Job লগ দেখো — কোনো selector fail করলে ঠিক কোন লাইনে সমস্যা সেটা এরর মেসেজে বলে দেবে
-
-এরপর থেকে প্রতিদিন নিজে থেকে চলবে: ক্যাম্পেইন না থাকলে চুপচাপ স্কিপ করবে,
-থাকলে পুরো পাইপলাইন চালিয়ে Vyro-তে লিংক জমা দিয়ে দেবে, এবং
-`processed_campaigns.json`-এ লিখে রাখবে যাতে একই ক্যাম্পেইন দুইবার সাবমিট না হয়।
-
-## ধাপ ৬: Instagram Reels আপলোড সেটআপ (সম্পন্ন)
-
-`IG_ACCESS_TOKEN` আর `IG_BUSINESS_ACCOUNT_ID` secret ইতিমধ্যে সেট করা হয়েছে।
-Instagram তার API দিয়ে সরাসরি ফাইল নেয় না — একটা পাবলিক URL থেকে ভিডিও
-"টেনে" নেয়, তাই `instagram_uploader.py` রেন্ডার হওয়া ভিডিওকে সাময়িকভাবে
-একটা **আলাদা পাবলিক GitHub রিপোতে** Release asset হিসেবে আপলোড করে,
-সেই লিংক Instagram-কে দেয়, publish হওয়ার পর ওই temporary ফাইলটা থেকে যায়
-(চাইলে periodically রিলিজ মুছে ফেলার automation পরে যোগ করা যাবে)।
-
-**এই ২টা অতিরিক্ত secret লাগবে:**
-
-1. GitHub-এ একটা নতুন **PUBLIC** রিপো বানাও (শুধু ভিডিও হোস্ট করার জন্য, কোনো কোড রাখতে হবে না) — যেমন নাম `vyro-media-host`
-2. GitHub → প্রোফাইল ছবি → **Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**
-   - Scope-এ শুধু **`repo`** টিক দাও
-   - Expiration: চাইলে "No expiration" বা ১ বছর
-   - Generate করে টোকেনটা কপি করে রাখো (একবারই দেখাবে)
-3. মূল automation রিপোতে (Vyro-automation) দুটো secret যোগ করো:
-   - `ASSET_HOST_REPO` — মান: `তোমার-ইউজারনেম/vyro-media-host` (উদাহরণ: `debashispaul2023-svg/vyro-media-host`)
-   - `ASSET_HOST_TOKEN` — মান: উপরে বানানো Personal Access Token
-
-এই দুটো সেট হলেই Instagram আপলোড ধাপ কাজ করবে। YouTube upload ব্যর্থ হলে পুরো
-রান বন্ধ হয়ে যাবে, কিন্তু Instagram ধাপ ব্যর্থ হলে শুধু লগে এরর দেখাবে আর
-বাকি পাইপলাইন (Vyro-তে লিংক সাবমিট) চালিয়ে যাবে — Instagram-কে "বোনাস"
-চ্যানেল হিসেবে ধরা হয়েছে যাতে এটার সমস্যায় মূল YouTube+Vyro ফ্লো আটকে না যায়।
-
-`IG_ACCESS_TOKEN` প্রতি ৬০ দিনে মেয়াদ শেষ হবে — তখন Meta Developer App →
-Instagram → API setup with Instagram login → আবার "Generate token" চেপে
-নতুন টোকেন দিয়ে secret আপডেট করতে হবে।
-
-## ধাপ ৭: Whop সেটআপ (দ্বিতীয় ক্যাম্পেইন সোর্স)
-
-Whop-এ Google দিয়ে লগইন করো বলে সরাসরি লগইন automate করা যায় না। এর বদলে
-পুরো cookie জার (একসাথে সবগুলো cookie) কপি করে GitHub Secret-এ রাখতে হবে।
-
-**যেভাবে বের করবে:**
-1. Kiwi Browser দিয়ে whop.com-এ Google দিয়ে লগইন করো
-2. DevTools → **Network** ট্যাব → পেজ রিফ্রেশ করো
-3. whop.com-এ যাওয়া যেকোনো একটা request-এ ট্যাপ করো
-4. **Headers** ট্যাবে **Request Headers** সেকশনে **"Cookie:"** লাইন খুঁজো
-5. পুরো লম্বা মানটা (সব cookie সহ) কপি করো
-6. GitHub secret: `WHOP_COOKIE_HEADER` — মান: এই পুরো cookie স্ট্রিং
-
-**⚠️ সম্ভাব্য সমস্যা:** এই cookie-গুলোর একটা (`cf_clearance`) Cloudflare-এর
-bot-protection pass-token, যেটা তোমার নির্দিষ্ট IP-র সাথে বাঁধা থাকতে পারে।
-GitHub Actions সার্ভার ভিন্ন IP থেকে চলে বলে এটা কাজ নাও করতে পারে।
-
-**⚠️ গুরুত্বপূর্ণ — Whop-এ কোনো "My Campaigns" পেজ নেই:**
-প্রতিটা joined ক্যাম্পেইনের নিজস্ব URL থাকে, একসাথে লিস্ট দেখার কোনো পেজ
-Whop-এ নেই। তাই তুমি যেসব ক্যাম্পেইনে join করেছ, সেগুলোর URL
-**`whop_campaigns.json`** ফাইলে ম্যানুয়ালি যোগ করে দিতে হবে:
-
-```json
-{
-  "joined_campaign_urls": [
-    "https://whop.com/creator-name/exp_xxx/app/campaigns/xxx/",
-    "আরও একটা ক্যাম্পেইনের URL এখানে যোগ করো"
-  ]
-}
-```
-
-নতুন কোনো ক্যাম্পেইনে join করলেই এই ফাইলে ওই ক্যাম্পেইনের URL যোগ করে
-GitHub-এ commit করে দিও — bot প্রতিদিন এই লিস্টের প্রতিটা URL চেক করবে।
-
-**⚠️ কিছু ক্যাম্পেইনে সরাসরি ক্লিপ দেওয়া থাকে না, Google Doc-এ থাকে:**
-অনেক Whop ক্যাম্পেইন ("Post clip... Please refer to Google Doc for
-requirements") আসল ফুটেজ/নিয়ম একটা external Google Doc-এ রাখে। bot এখন
-`google_doc_reader.py` দিয়ে সেই Doc পড়ে সেখান থেকে ভিডিও লিংক (Drive/
-YouTube/Dropbox ইত্যাদি) বের করার চেষ্টা করবে। **শর্ত:** ওই Google Doc-টা
-অবশ্যই "Anyone with the link can view" হিসেবে শেয়ার করা থাকতে হবে,
-নাহলে bot পড়তে পারবে না।
-
-`daily_runner.py` এখন প্রথমে Vyro চেক করবে, কিছু না পেলে
-`whop_campaigns.json`-এর প্রতিটা ক্যাম্পেইন চেক করবে (region-locked বা
-budget শেষ হয়ে যাওয়া ক্যাম্পেইন এড়িয়ে যাবে), যেখানে valid campaign পাবে
-সেখান থেকেই প্রসেস করে সেই একই প্ল্যাটফর্মে লিংক সাবমিট করবে।
-
-## ধাপ ৮: AI Brain সেটআপ (Gemini API — ফ্রি)
-
-এখন থেকে টেমপ্লেটের বদলে Google Gemini AI দিয়ে requirement বোঝা, title/caption
-লেখা, আর campaign-এর মান যাচাই করা হবে। **সম্পূর্ণ ফ্রি** — Gemini-র Flash
-মডেল ফ্রি টায়ারে পাওয়া যায় (rate limit সহ), প্রতিদিনের এই অল্প কাজে সেই
-লিমিটই যথেষ্ট।
-
-**সেটআপ:**
-1. [aistudio.google.com/apikey](https://aistudio.google.com/apikey)-এ যাও, Google অ্যাকাউন্ট দিয়ে লগইন করো
-2. **"Create API key"** চাপো, নতুন key বানাও
-3. GitHub secret যোগ করো:
-   - Name: `GEMINI_API_KEY`
-   - Value: এইমাত্র বানানো key
-
-**AI brain যা করবে (`ai_brain.py`):**
-- **Requirement parsing** — যেকোনো ভাষা/ফরম্যাটে লেখা ক্যাম্পেইন নিয়ম বুঝে হ্যাশট্যাগ/লিংক/duration/referral code বের করবে (আগের রেজেক্স-বেসড পার্সার এখন শুধু fallback হিসেবে থাকবে, AI ব্যর্থ হলে সেটা ব্যবহার হবে)
-- **Metadata generation** — টেমপ্লেটের বদলে সত্যিকারের আকর্ষণীয় title/description/caption লিখবে, কিন্তু বাধ্যতামূলক hashtag/link ঠিকই থাকবে নিশ্চিত করা হয় (safety-check করে)
-- **Campaign quality screening** — নতুন ক্যাম্পেইন পেলে প্রথমে AI দিয়ে যাচাই করবে সেটা legit মনে হচ্ছে কিনা (অস্পষ্ট/সন্দেহজনক শর্ত থাকলে স্কিপ করে অন্য প্ল্যাটফর্ম ট্রাই করবে — Vyro-তে খারাপ ক্যাম্পেইন পেলে Whop চেক করবে, বা উল্টো)
-
-**গুরুত্বপূর্ণ:** ফ্রি টায়ারের rate limit থাকায় (প্রতি মিনিটে/দিনে সীমিত
-রিকোয়েস্ট), যদি একই দিনে বারবার ম্যানুয়ালি workflow রান করো তাহলে মাঝে মাঝে
-limit ছুঁয়ে যেতে পারে — তখন AI ব্যর্থ হয়ে টেমপ্লেট/regex fallback ব্যবহার
-হবে (পাইপলাইন থেমে যাবে না, শুধু কম "স্মার্ট" আউটপুট আসবে)।
-
-**এখনো বানানো হয়নি (পরের ধাপে):**
-- Video থেকে automatically সেরা মুহূর্ত বেছে ক্লিপ করা (transcript লাগবে, আলাদা বড় কাজ)
-- Comment-এ AI দিয়ে auto-reply
-
-## গুরুত্বপূর্ণ সতর্কতা
-- Vyro-তে bot দিয়ে auto-login/auto-submit করা তাদের Terms of Service ভঙ্গ করতে পারে। এটা সম্পূর্ণ তোমার নিজের অ্যাকাউন্ট, নিজের ঝুঁকি — Vyro-র ToS একবার পড়ে নেওয়া ভালো।
-- `vyro_client.py`-এর selector গুলো Vyro তাদের ওয়েবসাইট রিডিজাইন করলে ভেঙে যেতে পারে — তখন আবার ধাপ ০ রিপিট করতে হবে।
-- সোর্স ক্লিপ ডাউনলোড লজিক (`daily_runner.py`) yt-dlp দিয়ে চেষ্টা করে, না হলে সরাসরি HTTP download — Vyro যদি অন্য কোনো পদ্ধতিতে ক্লিপ দেয় (যেমন লগইন-প্রোটেক্টেড লিংক), সেটার জন্য আলাদা হ্যান্ডলিং লাগবে।
-
-## নোট
-- `push` ইভেন্টে পুরনো `vyro_pipeline.yml` অটো-ট্রিগার হয় শুধু তখনই যখন `campaign.json` মডিফাই হয়ে মেইন ব্রাঞ্চে পুশ হয় — এটা ম্যানুয়াল/টেস্ট রানের জন্য রাখা হয়েছে।
-- CI রানারে `TextClip`-এর জন্য ImageMagick policy issue হতে পারে; হলে `/etc/ImageMagick-6/policy.xml`-এ `PDF`/`TEXT` rights সংশোধন লাগতে পারে।
-- OAuth রিফ্রেশ টোকেন সাধারণত মেয়াদ শেষ হয় না যতক্ষণ না আপনি নিজে Google অ্যাকাউন্ট থেকে অ্যাক্সেস revoke করেন; করলে ধাপ ১ আবার করতে হবে।
+- Phone-first operator. Prefer 3–4 changed files, not a full zip, unless asked.
+- Main goal: Instagram views / Whop CPM. Requirements beat clever edits.
+- When a new BloxClips card is green/allowed, bot should pick it up from the board without a pasted Doc link.
