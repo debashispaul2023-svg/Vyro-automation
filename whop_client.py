@@ -205,6 +205,8 @@ def _get_content_frame(page: Page):
                 continue
             lower = stripped.lower()
             url = (frame.url or "").lower()
+            if any(x in url for x in ("hcaptcha", "captcha", "stripecdn", "recaptcha")):
+                continue
             marker_hits = sum(1 for marker in CONTENT_MARKERS if marker in lower)
             score = marker_hits * 10 + min(len(stripped), 5000) // 200
             if "submit clip" in lower:
@@ -534,6 +536,23 @@ BLOX_CAMPAIGN_IDS = {
     "Tongue Escape": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
     "How to Fisch": "b59bb70c-58bf-44c1-9e44-0b54c59d90f4",
 }
+
+
+def _campaign_uuid(campaign) -> str:
+    cid = (getattr(campaign, "campaign_id", "") or "").strip()
+    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", cid, re.I):
+        return cid
+    blob = f"{getattr(campaign, 'name', '')} {getattr(campaign, 'submit_page_url', '')}"
+    for key, uid in BLOX_CAMPAIGN_IDS.items():
+        if key.lower() in blob.lower():
+            return uid
+    low = blob.lower()
+    if "tongue" in low:
+        return BLOX_CAMPAIGN_IDS["Tongue Escape"]
+    if "fisch" in low:
+        return BLOX_CAMPAIGN_IDS["How to Fisch"]
+    m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", blob, re.I)
+    return m.group(1) if m else ""
 
 
 def _app_origin(page: Page) -> str:
@@ -902,10 +921,12 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                 if doc:
                     campaign.reference_doc_url = doc
                 uuid = (entry.get("campaign_uuid") or "").strip()
-                if uuid and "campaigns/" not in (campaign.submit_page_url or ""):
-                    campaign.submit_page_url = (
-                        "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
-                    )
+                if uuid:
+                    campaign.campaign_id = uuid
+                    if "campaigns/" not in (campaign.submit_page_url or ""):
+                        campaign.submit_page_url = (
+                            f"https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/campaigns/{uuid}"
+                        )
                 blob = f"{campaign.name} {name_hint}".lower()
                 has_assets = bool((campaign.source_clip_url or "").strip() or (campaign.reference_doc_url or "").strip())
                 if "fisch" in blob:
@@ -975,6 +996,139 @@ def _open_campaign_app_frame(page: Page, campaign_url: str):
     except Exception as exc:
         print(f"[whop_client debug] Iframe goto failed: {exc}")
     return _get_content_frame(page)
+
+
+def _goto_campaign_detail(page: Page, uid: str):
+    """Open the one campaign detail that has the Submit form. Never stay on the grid."""
+    app = _wait_for_app_frame(page, timeout_ms=20000)
+    if app is None:
+        raise WhopClientError("apps.whop.com iframe missing — cannot open campaign detail")
+    origin = (app.url or "").split("/discover")[0].split("/campaigns")[0]
+    target = f"{origin}/campaigns/{uid}"
+    print(f"[whop] detail goto {target}")
+    try:
+        app.goto(target, timeout=25000)
+    except Exception as exc:
+        print(f"[whop] iframe goto failed ({exc}); retry")
+        page.wait_for_timeout(800)
+        app.goto(target, timeout=25000)
+    page.wait_for_timeout(2000)
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        app = _wait_for_app_frame(page, timeout_ms=3000) or app
+        url = getattr(app, "url", "") or ""
+        if uid.lower() in url.lower() and "/campaigns/" in url:
+            print(f"[whop] on detail {url}")
+            return app
+        page.wait_for_timeout(500)
+    print(f"[whop] still not on uuid page, url={getattr(app, 'url', '')}")
+    return _get_content_frame(page)
+
+
+def _fill_submit_url(page: Page, frame, video_url: str):
+    roots = []
+    for root in [frame, page] + list(page.frames):
+        ru = (getattr(root, "url", "") or "").lower()
+        if any(x in ru for x in ("hcaptcha", "captcha", "stripecdn", "recaptcha")):
+            continue
+        roots.append(root)
+    for root in roots:
+        try:
+            _select_platform_icon(root, video_url)
+        except Exception:
+            pass
+    selectors = [
+        "input[placeholder*='http' i]",
+        "input[placeholder*='url' i]",
+        "input[placeholder*='youtube' i]",
+        "input[placeholder*='instagram' i]",
+        "input[placeholder*='tiktok' i]",
+        "input[placeholder*='paste' i]",
+        "input[type='url']",
+        "textarea",
+        "input[type='text']",
+    ]
+    for root in roots:
+        for sel in selectors:
+            try:
+                box = root.locator(sel).last
+                box.wait_for(state="visible", timeout=2500)
+                box.click(timeout=2000)
+                box.fill("")
+                box.fill(video_url, timeout=4000)
+                print(f"[whop] filled URL via {sel} on {getattr(root, 'url', '')[:80]}")
+                return root
+            except Exception:
+                continue
+    for root in roots:
+        try:
+            handle = root.evaluate_handle(
+                """(url) => {
+                    const nodes = [...document.querySelectorAll('input,textarea')];
+                    const box = nodes.reverse().find(el =>
+                        (el.offsetParent !== null) &&
+                        (el.type === 'url' || el.type === 'text' || el.tagName === 'TEXTAREA')
+                    );
+                    if (!box) return false;
+                    box.focus();
+                    box.value = url;
+                    box.dispatchEvent(new Event('input', {bubbles:true}));
+                    box.dispatchEvent(new Event('change', {bubbles:true}));
+                    return true;
+                }""",
+                video_url,
+            )
+            if handle.json_value():
+                print("[whop] filled URL via DOM eval")
+                return root
+        except Exception:
+            continue
+    raise WhopClientError("Submit form opened but no URL box was found.")
+
+
+def _tick_submit_confirmations(page: Page, form) -> None:
+    """Tick every confirm row + the requirements checkbox on the submit sheet."""
+    labels = (
+        r"posted from one of your linked",
+        r"not already submitted",
+        r"posted within the last 30 minutes",
+        r"i'?ve read the requirements",
+        r"read the requirements",
+        r"accept that non-compliant",
+    )
+    roots = [form, page] + list(page.frames)
+    for label in labels:
+        clicked = False
+        for root in roots:
+            ru = (getattr(root, "url", "") or "").lower()
+            if any(x in ru for x in ("hcaptcha", "captcha", "stripecdn")):
+                continue
+            try:
+                root.get_by_text(re.compile(label, re.I)).first.click(timeout=2500, force=True)
+                print(f"[whop] ticked: {label}")
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            print(f"[whop] could not tick: {label}")
+    for root in roots:
+        try:
+            boxes = root.get_by_role("checkbox")
+            n = boxes.count()
+            for i in range(min(n, 6)):
+                try:
+                    boxes.nth(i).check(timeout=1500)
+                except Exception:
+                    try:
+                        boxes.nth(i).click(timeout=1500, force=True)
+                    except Exception:
+                        pass
+            if n:
+                print(f"[whop] checked {n} checkbox(es)")
+                break
+        except Exception:
+            continue
 
 
 def _click_submit_clip(frame, *, last: bool = False) -> None:
@@ -1067,7 +1221,10 @@ def _clean_public_video_url(video_url: str) -> str:
 
 def _submission_looks_accepted(text: str) -> bool:
     lower = (text or "").lower()
-    good = ("submitted", "pending review", "under review", "clip submitted", "successfully")
+    good = (
+        "submitted", "pending review", "under review", "clip submitted",
+        "successfully", "my work", "awaiting review", "in review",
+    )
     bad = ("invalid url", "couldn't submit", "could not submit", "already submitted", "error")
     if any(b in lower for b in bad):
         return False
@@ -1082,57 +1239,37 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
         context = _new_context_with_session(browser)
         page = context.new_page()
         try:
-            _ensure_logged_in(page, campaign.submit_page_url)
-            page.wait_for_timeout(2000)
-            _open_named_campaign(page, campaign)
-            frame = _open_campaign_app_frame(page, campaign.submit_page_url)
+            uid = _campaign_uuid(campaign)
+            if not uid:
+                raise WhopClientError(f"No campaign UUID for '{campaign.name}' — cannot open submit form")
+            board = "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
+            print(f"[whop] submit start uid={uid}")
+            _ensure_logged_in(page, board)
+            page.wait_for_timeout(1200)
+            frame = _goto_campaign_detail(page, uid)
             print(f"[whop] submit frame url={getattr(frame, 'url', '')}")
-            hint = (campaign.name or '').lower()
             try:
-                seen = (page.inner_text('body') or '')[:3000].lower()
+                seen = ((frame.inner_text("body") if frame else "") or page.inner_text("body") or "")[:2500].lower()
             except Exception:
-                seen = ''
-            if hint and hint[:10] not in seen and 'forgegui' in seen:
+                seen = ""
+            if "forgegui" in seen and "tongue" not in seen and "fisch" not in seen:
                 raise WhopClientError(
                     f"WRONG CAMPAIGN on screen (ForgeGUI). Refusing submit for {campaign.name}."
                 )
             try:
                 frame = _click_submit_anywhere(page, last=False)
-            except Exception:
+            except Exception as exc:
+                print(f"[whop] first Submit clip click missed ({exc})")
                 frame = _get_content_frame(page)
                 _click_submit_clip(frame, last=False)
-            page.wait_for_timeout(1200)
-            form = frame
-            for root in [frame, page] + list(page.frames):
-                try:
-                    _select_platform_icon(root, video_url)
-                except Exception:
-                    pass
-            filled = False
-            for root in [frame, page] + list(page.frames):
-                try:
-                    url_input = root.get_by_placeholder(re.compile(r"tiktok\.com|youtube\.com|instagram\.com|video|paste|url", re.I))
-                    url_input.first.fill(video_url, timeout=10000)
-                    form = root
-                    filled = True
-                    break
-                except Exception:
-                    try:
-                        root.locator("input[type='url'], input[type='text']").last.fill(video_url, timeout=2000)
-                        form = root
-                        filled = True
-                        break
-                    except Exception:
-                        continue
-            if not filled:
-                raise WhopClientError("Submit form opened but no URL box was found.")
+            page.wait_for_timeout(1800)
             try:
-                form.get_by_role("checkbox").first.check(timeout=3000)
+                frame.get_by_text(re.compile(r"submit video link", re.I)).first.wait_for(timeout=8000)
+                print("[whop] submit sheet visible")
             except Exception:
-                try:
-                    form.get_by_text(re.compile("read the requirements", re.I)).click(timeout=3000)
-                except Exception:
-                    print("[whop] no requirements checkbox found — continuing")
+                print("[whop] submit sheet heading not seen — still filling")
+            form = _fill_submit_url(page, frame, video_url)
+            _tick_submit_confirmations(page, form)
             if dry_run:
                 print("[whop] DRY RUN — form filled, final Submit not clicked.")
                 print(f"[whop] would submit: {video_url}")
