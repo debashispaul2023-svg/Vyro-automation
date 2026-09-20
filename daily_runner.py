@@ -267,6 +267,19 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         except (TypeError, ValueError):
             return 0.0
     unused = [c for c in unused if _ms(c) >= 10000]
+    best_by_num: dict[int, dict] = {}
+    leftovers = []
+    for c in unused:
+        name = c.get("name") or ""
+        m = re.search(r"(\d+)", name)
+        if not m:
+            leftovers.append(c)
+            continue
+        num = int(m.group(1))
+        prev = best_by_num.get(num)
+        if prev is None or _ms(c) > _ms(prev):
+            best_by_num[num] = c
+    unused = list(best_by_num.values()) + leftovers
     unused.sort(key=_clip_sort_key)
     pack = []
     if first and any(c["clip_id"] == first["clip_id"] for c in unused):

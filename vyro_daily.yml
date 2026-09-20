@@ -2,10 +2,11 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    # 3x daily, US Eastern (EDT = UTC-4)
-    - cron: "0 15 * * *"  # 11:00 AM ET — lunch Reels
-    - cron: "0 20 * * *"  # 4:00 PM ET — after-school gaming
-    - cron: "0 23 * * *"  # 7:00 PM ET — prime evening Reels/Shorts
+    # USA audience, US Eastern. Cron is UTC. EDT = UTC-4 (Mar–Nov).
+    # Reels peak: lunch + 6–9 PM. Shorts peak: afternoon + 6–9 PM.
+    - cron: "0 16 * * *"  # 12:00 PM ET — US lunch scroll (East lunch / Central late morning)
+    - cron: "0 21 * * *"  #  5:00 PM ET — after-school + after-work (East evening start / Pacific lunch)
+    - cron: "0 0 * * *"   #  8:00 PM ET — prime Reels/Shorts night (East prime / Central 7 PM / Pacific 5 PM)
   workflow_dispatch: {}
 
 permissions:
@@ -14,7 +15,7 @@ permissions:
 jobs:
   check-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -115,11 +116,16 @@ jobs:
           path: output/short.mp4
           if-no-files-found: ignore
 
-      - name: Commit updated processed_campaigns.json
+      - name: Commit updated processed_clips.json
         if: always()
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          git add processed_campaigns.json processed_clips.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update processed clips [skip ci]"
-          git push || true
+          git add processed_clips.json processed_campaigns.json
+          git status
+          if git diff --staged --quiet; then
+            echo "No clip-log changes to commit"
+          else
+            git commit -m "Update processed clips [skip ci]"
+            git push
+          fi
