@@ -704,7 +704,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                             app.goto(target, timeout=20000)
                             page.wait_for_timeout(2000)
                             frame = _discover_root(page)
-                            card_texts = frame.get_by_text(rate)
+                            card_texts = frame.get_by_text(re.compile(r"\$\d", re.I))
                             card_count = min(card_texts.count(), 20)
                             print(f"[whop_client debug] In-app Discover cards: {card_count}")
                     except Exception as exc:
@@ -789,7 +789,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                     page.goto(WHOP_DISCOVER_URL, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
                     _settle(page)
                     frame = _discover_root(page)
-                    card_texts = frame.get_by_text(rate)
+                    card_texts = frame.get_by_text(re.compile(r"\$\d", re.I))
                 except Exception as exc:
                     print(f"[whop_client debug] Could not return to Discover: {exc}")
                     break
@@ -1221,13 +1221,16 @@ def _clean_public_video_url(video_url: str) -> str:
 
 def _submission_looks_accepted(text: str) -> bool:
     lower = (text or "").lower()
-    good = (
-        "submitted", "pending review", "under review", "clip submitted",
-        "successfully", "my work", "awaiting review", "in review",
-    )
-    bad = ("invalid url", "couldn't submit", "could not submit", "already submitted", "error")
+    if "submit video link" in lower:
+        return False
+    bad = ("invalid url", "couldn't submit", "could not submit", "error submitting")
     if any(b in lower for b in bad):
         return False
+    good = (
+        "pending review", "under review", "awaiting review",
+        "clip submitted", "submission received", "successfully submitted",
+        "thanks for submitting", "sent for review",
+    )
     return any(g in lower for g in good)
 
 
@@ -1269,26 +1272,43 @@ def submit_video_link(campaign: WhopCampaign, video_url: str, dry_run: bool = Fa
             except Exception:
                 print("[whop] submit sheet heading not seen — still filling")
             form = _fill_submit_url(page, frame, video_url)
+            page.wait_for_timeout(1500)
             _tick_submit_confirmations(page, form)
+            page.wait_for_timeout(800)
             if dry_run:
                 print("[whop] DRY RUN — form filled, final Submit not clicked.")
                 print(f"[whop] would submit: {video_url}")
                 return
-            try:
-                _click_submit_anywhere(page, last=True)
-            except Exception:
-                _click_submit_clip(form, last=True)
-            page.wait_for_timeout(2500)
+            clicked_final = False
+            for root in [form, frame, page] + list(page.frames):
+                try:
+                    btn = root.get_by_role("button", name=re.compile(r"^submit clip$", re.I)).last
+                    btn.wait_for(state="visible", timeout=4000)
+                    btn.click(timeout=8000, force=True)
+                    print("[whop] clicked form Submit clip")
+                    clicked_final = True
+                    break
+                except Exception:
+                    continue
+            if not clicked_final:
+                try:
+                    _click_submit_anywhere(page, last=True)
+                    clicked_final = True
+                except Exception:
+                    _click_submit_clip(form, last=True)
+                    clicked_final = True
+            page.wait_for_timeout(3500)
             _settle(page)
             try:
                 body = frame.inner_text("body")
             except Exception:
                 body = page.inner_text("body")
             print(f"[whop] post-submit text snippet: {body[:400]!r}")
-            if not _submission_looks_accepted(body):
+            still_form = "submit video link" in (body or "").lower()
+            if still_form or not _submission_looks_accepted(body):
                 raise WhopClientError(
-                    "Clicked Submit but page did not show a success/pending message. "
-                    "Treat as NOT submitted. Check My work / Drafts on the phone."
+                    "Submit clip clicked but Whop did not confirm. "
+                    "Form may still be open. Treat as NOT submitted."
                 )
             print(f"[whop] submitted: {video_url}")
         except PlaywrightTimeoutError as exc:
