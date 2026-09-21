@@ -443,6 +443,218 @@ def _font() -> str:
     return ""
 
 
+def _scene_times(path: str, thresh: float = 0.10) -> list[float]:
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-i", path,
+                "-filter:v", f"select='gt(scene,{thresh})',showinfo",
+                "-an", "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=90,
+        )
+    except Exception:
+        return []
+    times = []
+    for line in (proc.stderr or "").splitlines():
+        m = re.search(r"pts_time:([0-9.]+)", line)
+        if m:
+            times.append(float(m.group(1)))
+    return times
+
+
+def _best_action_start(path: str, window: float = 2.6) -> float:
+    """Start time of the 2-3s window with the most scene cuts."""
+    cuts = _scene_times(path, 0.10)
+    dur = _probe_dur(path)
+    if not cuts or dur < window + 0.4:
+        return 0.0
+    best_t, best_n = 0.0, -1
+    t = 0.0
+    while t + window <= dur + 0.01:
+        n = sum(1 for c in cuts if t <= c < t + window)
+        if n > best_n:
+            best_n, best_t = n, t
+        t += 0.35
+    print(f"[hook] action window @{best_t:.2f}s ({best_n} cuts)")
+    return best_t
+
+
+def _prep_footage(path: str) -> None:
+    """Action hook in front + drop near-still frames."""
+    if not os.path.isfile(path):
+        return
+    dur = _probe_dur(path)
+    if dur < 4:
+        return
+    os.makedirs("work", exist_ok=True)
+    hook_at = _best_action_start(path, 2.6)
+    hooked = "work/hooked.mp4"
+    if hook_at >= 0.45:
+        hook = "work/hook.mp4"
+        rest = "work/rest.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", f"{hook_at:.2f}", "-t", "2.60", "-i", path,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", hook],
+            capture_output=True, timeout=60,
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "18", "-c:a", "aac", rest],
+            capture_output=True, timeout=90,
+        )
+        lst = "work/hook_list.txt"
+        with open(lst, "w", encoding="utf-8") as fh:
+            fh.write(f"file '{os.path.abspath(hook)}'\n")
+            fh.write(f"file '{os.path.abspath(rest)}'\n")
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", hooked],
+            capture_output=True, timeout=40,
+        )
+        if os.path.isfile(hooked) and os.path.getsize(hooked) > 1000:
+            shutil.move(hooked, path)
+            print("[hook] 2.6s action packed at start")
+    # Drop near-duplicate / static frames so the cut keeps moving
+    live = "work/live.mp4"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", path,
+                "-vf", "mpdecimate=hi=64*12:lo=64*5:frac=0.33,setpts=N/FRAME_RATE/TB",
+                "-af", "asetpts=N/SR/TB",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", live,
+            ],
+            check=True, capture_output=True, timeout=120,
+        )
+        new_d = _probe_dur(live)
+        if os.path.isfile(live) and os.path.getsize(live) > 1000 and new_d >= 6:
+            shutil.move(live, path)
+            print(f"[edit] static dropped {dur:.1f}s -> {new_d:.1f}s")
+    except Exception as exc:
+        print(f"[edit] mpdecimate skipped: {exc}")
+
+
+def _zoom_cuts(path: str) -> None:
+    """Gentle zoom reset every ~2.5s."""
+    if not os.path.isfile(path):
+        return
+    work = "work/zoom.mp4"
+    os.makedirs("work", exist_ok=True)
+    vf = (
+        "scale=1188:2112,"
+        "crop=1080:1920:"
+        "'(in_w-1080)/2+40*sin(2*PI*t/2.6)':"
+        "'(in_h-1920)/2+24*cos(2*PI*t/2.6)',"
+        "setsar=1"
+    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-vf", vf,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-c:a", "copy", work],
+            check=True, capture_output=True, timeout=120,
+        )
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, path)
+            print("[edit] 2.6s zoom/pan cuts")
+    except Exception as exc:
+        print(f"[edit] zoom skipped: {exc}")
+
+
+def _caption_groups(words: list[dict], script: str) -> list[tuple[float, float, str]]:
+    """3-4 word groups. Next line waits until the current one ends."""
+    tokens = []
+    for w in words or []:
+        txt = re.sub(r"[^\w+#']+", "", str(w.get("text") or ""))
+        if not txt:
+            continue
+        tokens.append((float(w.get("start") or 0), float(w.get("end") or 0), txt))
+    if not tokens:
+        raw = [s for s in re.split(r"\s+", script or "") if s]
+        t = 0.0
+        out = []
+        for i in range(0, len(raw), 4):
+            chunk = raw[i:i + 4]
+            dur = max(1.1, len(chunk) * 0.32)
+            out.append((t, t + dur, " ".join(chunk)))
+            t += dur
+        return out
+    out = []
+    i = 0
+    last_end = 0.0
+    while i < len(tokens):
+        chunk = tokens[i:i + 4]
+        i += 4
+        a = max(last_end, chunk[0][0])
+        b = max(a + 0.7, chunk[-1][1] + 0.06)
+        line = " ".join(c[2] for c in chunk)
+        # wrap to ~2 lines / ~80% width (~18 chars/line at this size)
+        if len(line) > 22:
+            parts = line.split()
+            mid = max(1, (len(parts) + 1) // 2)
+            line = " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
+        out.append((a, b, line))
+        last_end = b
+    return out
+
+
+def _hook_line(blob: str) -> str:
+    low = (blob or "").lower()
+    if "tongue" in low:
+        return "Your tongue is the path!"
+    if "fisch" in low:
+        return "Catch fish. Then FIGHT."
+    if "steal" in low and "seed" in low:
+        return "Steal the seed. RUN."
+    return "Watch this!"
+
+
+def _end_cta_line(blob: str) -> str:
+    low = (blob or "").lower()
+    if re.search(r"\b(code|codes|promo)\b", low):
+        return "Follow for more codes"
+    return "Follow for more"
+
+
+def _loudnorm(path: str) -> None:
+    if not os.path.isfile(path):
+        return
+    work = "work/loud.mp4"
+    os.makedirs("work", exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", path,
+                "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+                "-c:v", "copy", work,
+            ],
+            check=True, capture_output=True, timeout=90,
+        )
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, path)
+            print("[audio] loudnorm I=-14 TP=-1.5")
+    except Exception as exc:
+        print(f"[audio] loudnorm skipped: {exc}")
+
+
+def _qc_short(path: str) -> list[str]:
+    """Return list of fail reasons. Empty = pass."""
+    fails = []
+    if not os.path.isfile(path) or os.path.getsize(path) < 1000:
+        return ["missing file"]
+    dur = _probe_dur(path)
+    if dur < 6:
+        fails.append(f"too short {dur:.1f}s")
+    if dur > 32:
+        fails.append(f"too long {dur:.1f}s")
+    cuts = _scene_times(path, 0.04)
+    early = [c for c in cuts if c <= 3.0]
+    if not early and dur >= 3:
+        fails.append("no motion in first 3s")
+    return fails
+
+
 def _layout_voice(body_wav: str, cta_wav: str, dest: str, video_dur: float) -> bool:
     """Body plays from 0. CTA (Save. Follow.) is pinned to the last 2.3s."""
     body_d = _probe_dur(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
@@ -508,10 +720,7 @@ def _quality_boost(video_path: str) -> None:
     work = "output/quality.mp4"
     ff = [
         "ffmpeg", "-y", "-i", video_path,
-        "-vf",
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,setsar=1,"
-        "unsharp=5:5:1.4:5:5:0.0,eq=contrast=1.1:saturation=1.14:brightness=0.02",
+        "-vf", "unsharp=5:5:1.2:5:5:0.0,eq=contrast=1.06:saturation=1.08",
         "-c:v", "libx264", "-preset", "medium", "-crf", "17",
         "-c:a", "aac", "-b:a", "192k", work,
     ]
@@ -634,9 +843,10 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     if spoken:
         body_ok = _tts_spoken(spoken, body_wav)
         body_words = list(getattr(_tts_spoken, "last_words", []) or [])
-        cta_ok = _tts_spoken("Save. Hit follow.", cta_wav)
+        cta_line = _end_cta_line(blob)
+        cta_ok = _tts_spoken(cta_line + ".", cta_wav)
         if not cta_ok:
-            cta_ok = _tts_spoken("Save. Hit follow.", cta_wav)
+            cta_ok = _tts_spoken(cta_line + ".", cta_wav)
         _tts_spoken.last_words = body_words
         if not body_ok:
             raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
@@ -645,42 +855,47 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             shutil.copy(body_wav, tts)
             tts_ok = True
     words = list(getattr(_tts_spoken, "last_words", []) or [])
-    karaoke = karaoke_words(words, delay=0.0)[:48]
-    if not karaoke and spoken:
-        karaoke = [(a, b, t) for a, b, t in phrases_from_words(words, spoken)]
+    groups = _caption_groups(words, spoken)
     font = _font()
-    # Stickers are pinned to the VIDEO end, not the early voice end.
-    save_a, save_b = max(0.0, dur - 2.6), max(0.5, dur - 1.3)
-    follow_a, follow_b = max(0.0, dur - 1.3), dur
-    end_at = max(0.0, dur - 3.0)
+    hook_txt = _hook_line(blob)
+    end_cta = _end_cta_line(blob)
+    # last 2s reserved for CTA — captions must end before that
+    cta_a = max(0.0, dur - 2.0)
+    hook_b = min(2.2, cta_a - 0.15)
     parts = []
-    for a, b, txt in karaoke:
+    safe_hook = hook_txt.replace("\\", " ").replace("'", "").replace(":", " -")[:36]
+    parts.append(
+        f"drawtext={font}text='{safe_hook}':fontcolor=white:fontsize=72:"
+        f"borderw=6:bordercolor=black:"
+        f"x=(w-text_w)/2:y=h*0.18:enable='between(t,0,{hook_b:.2f})'"
+    )
+    for a, b, txt in groups:
         if b <= a or not txt:
             continue
-        clean = re.sub(r"[^A-Za-z0-9+#']+", "", txt)
-        if clean.lower() in {"save", "follow"}:
+        if a >= cta_a - 0.05:
             continue
-        if a >= save_a - 0.05:
-            continue
-        b = min(b, save_a - 0.05)
+        b = min(b, cta_a - 0.05)
         if b <= a:
             continue
-        safe = txt.replace("\\", " ").replace("'", "").replace(":", " -")[:22]
+        safe = txt.replace("\\", " ").replace("'", "").replace(":", " -").replace("\n", "\\n")[:40]
+        # ~25% from bottom, max 2 lines already wrapped, 80% width via fontsize
         parts.append(
-            f"drawtext={font}text='{safe}':fontcolor=white:fontsize=78:"
-            f"borderw=8:bordercolor=0x001033:"
-            f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
-            f"x=(w-text_w)/2:y=h-360:enable='between(t,{a:.2f},{b:.2f})'"
+            f"drawtext={font}text='{safe}':fontcolor=white:fontsize=56:"
+            f"borderw=5:bordercolor=black:"
+            f"x=(w-text_w)/2:y=h*0.72:enable='between(t,{a:.2f},{b:.2f})'"
         )
+    safe_cta = end_cta.replace("\\", " ").replace("'", "")[:32]
     parts.append(
-        f"drawtext={font}text=' SAVE ':fontcolor=0x001033:fontsize=110:"
-        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=28:"
-        f"x=(w-text_w)/2:y=h-430:enable='between(t,{save_a:.2f},{save_b:.2f})'"
+        f"drawtext={font}text='{safe_cta}':fontcolor=0x001033:fontsize=64:"
+        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=22:"
+        f"x=(w-text_w)/2:y=h*0.70:enable='between(t,{cta_a:.2f},{dur:.2f})'"
     )
+    game_line = (plan.get("speak_text") or campaign.name or "Roblox").strip()[:28]
+    safe_game = game_line.replace("\\", " ").replace("'", "")
     parts.append(
-        f"drawtext={font}text=' HIT FOLLOW ':fontcolor=0x001033:fontsize=88:"
-        f"box=1:boxcolor=0xFFE600@0.95:boxborderw=28:"
-        f"x=(w-text_w)/2:y=h-430:enable='between(t,{follow_a:.2f},{follow_b:.2f})'"
+        f"drawtext={font}text='{safe_game}':fontcolor=white:fontsize=48:"
+        f"borderw=5:bordercolor=black:"
+        f"x=(w-text_w)/2:y=h*0.80:enable='between(t,{cta_a:.2f},{dur:.2f})'"
     )
     if req_has_code:
         raw_req = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
@@ -691,13 +906,16 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         if cm:
             code = cm.group(1)
         parts.append(
-            f"drawtext={font}text='Use code {code}':fontcolor=white:fontsize=68:"
-            f"borderw=8:bordercolor=0x001033:"
-            f"x=(w-text_w)/2:y=h-300:enable='between(t,{max(0.0, save_a-1.4):.2f},{save_a:.2f})'"
+            f"drawtext={font}text='Use code {code}':fontcolor=white:fontsize=44:"
+            f"borderw=5:bordercolor=black:"
+            f"x=(w-text_w)/2:y=h*0.62:enable='between(t,{cta_a:.2f},{min(dur, cta_a+2.0):.2f})'"
         )
+    save_a, save_b = cta_a, dur
+    follow_a, follow_b = cta_a, dur
+    end_at = max(0.0, dur - 2.0)
     caption_vf = ",".join(parts) if parts else "null"
     draw = caption_vf
-    print(f"[caption] karaoke={len(karaoke)} SAVE {save_a:.1f}-{save_b:.1f} FOLLOW {follow_a:.1f}-{follow_b:.1f}")
+    print(f"[caption] groups={len(groups)} hook=0-{hook_b:.1f} cta={cta_a:.1f}-{dur:.1f}")
     en = f"gte(t,{end_at:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
@@ -825,9 +1043,14 @@ def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetada
     if "callofduty" in raw_l or "call of duty" in raw_l or "zodiac" in raw_l:
         lines.append("@Callofduty")
     lines.append("#Ad")
-    for tag in extras[:3]:
-        if tag.lower() not in ("#ad", "#advertisement", "#sponsored"):
-            lines.append(tag)
+    seen = {"#ad"}
+    for tag in extras[:3] + ["#roblox", "#viral", "#contentcreator"]:
+        token = tag if str(tag).startswith("#") else f"#{tag}"
+        key = token.lower()
+        if key in seen or key in ("#advertisement", "#sponsored"):
+            continue
+        seen.add(key)
+        lines.append(token)
     caption = "\n".join(lines)
     print(f"[caption] {caption!r}")
     return caption
@@ -1119,6 +1342,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
 
     try:
         _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
+        _prep_footage(SOURCE_CLIP_PATH)
         render_short(
             source_path=SOURCE_CLIP_PATH,
             output_path=OUTPUT_PATH,
@@ -1126,9 +1350,27 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             fallback_caption_text=None,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
+        _zoom_cuts(OUTPUT_PATH)
         _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
         _apply_requirement_tools(campaign, OUTPUT_PATH)
         _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
+        _loudnorm(OUTPUT_PATH)
+        qc = _qc_short(OUTPUT_PATH)
+        if qc:
+            print(f"[qc] FAIL {qc} — re-render without zoom")
+            render_short(
+                source_path=SOURCE_CLIP_PATH,
+                output_path=OUTPUT_PATH,
+                req=req,
+                fallback_caption_text=None,
+            )
+            _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
+            _apply_requirement_tools(campaign, OUTPUT_PATH)
+            _loudnorm(OUTPUT_PATH)
+            qc2 = _qc_short(OUTPUT_PATH)
+            print(f"[qc] retry {'PASS' if not qc2 else 'WARN ' + str(qc2)}")
+        else:
+            print("[qc] PASS motion + duration")
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")
