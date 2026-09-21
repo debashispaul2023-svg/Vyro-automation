@@ -249,6 +249,60 @@ def _maybe_download_game_icon(folder_url: str) -> None:
         print(f"[icon] download failed: {exc}")
 
 
+def _icon_path() -> str:
+    for p in ("output/game_icon.png", "output/game_icon.jpg"):
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def _pin_icon_thumbnail(video_path: str) -> None:
+    """First frame = game icon so IG/YT grid thumbnail is the icon."""
+    icon = _icon_path()
+    if not icon or not os.path.isfile(video_path):
+        print("[thumb] no game icon — skip")
+        return
+    os.makedirs("work", exist_ok=True)
+    card = "work/icon_thumb.mp4"
+    out = "work/with_thumb.mp4"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", "color=c=0x07070f:s=1080x1920:d=0.40:r=30",
+                "-i", icon,
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=0.40",
+                "-filter_complex",
+                "[1:v]scale=820:820:force_original_aspect_ratio=decrease,"
+                "pad=840:840:(ow-iw)/2:(oh-ih)/2:white[ic];"
+                "[0:v][ic]overlay=(W-w)/2:(H-h)/2[v]",
+                "-map", "[v]", "-map", "2:a",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2", "-t", "0.40",
+                card,
+            ],
+            check=True, capture_output=True, timeout=40,
+        )
+        lst = "work/thumb_concat.txt"
+        with open(lst, "w", encoding="utf-8") as fh:
+            fh.write(f"file '{os.path.abspath(card)}'\n")
+            fh.write(f"file '{os.path.abspath(video_path)}'\n")
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                out,
+            ],
+            check=True, capture_output=True, timeout=120,
+        )
+        if os.path.isfile(out) and os.path.getsize(out) > 1000:
+            shutil.move(out, video_path)
+            print(f"[thumb] game icon is first frame ({icon})")
+    except Exception as exc:
+        print(f"[thumb] icon card failed: {exc}")
+
+
 
 def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict]:
     """3-4 unused official clips so the edit can explain the loop like the example."""
@@ -656,43 +710,44 @@ def _qc_short(path: str) -> list[str]:
 
 
 def _layout_voice(body_wav: str, cta_wav: str, dest: str, video_dur: float) -> bool:
-    """Body plays from 0. CTA (Save. Follow.) is pinned to the last 2.3s."""
-    body_d = _probe_dur(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
-    cta_d = _probe_dur(cta_wav) if cta_wav and os.path.isfile(cta_wav) else 0.0
-    cta_at = max(1.0, video_dur - max(cta_d, 2.1) - 0.05)
-    gap = max(0.15, cta_at - body_d)
-    if body_d > cta_at - 0.2 and body_wav:
-        trimmed = dest.replace(".wav", "_bodytrim.wav")
+    """Body only — no silent hole in the middle. CTA is mixed separately at the end."""
+    if not body_wav or not os.path.isfile(body_wav):
+        return False
+    body_d = _probe_dur(body_wav)
+    try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", body_wav, "-t", f"{max(0.8, cta_at - 0.25):.2f}",
-             "-c:a", "pcm_s16le", trimmed],
+            ["ffmpeg", "-y", "-i", body_wav, "-c:a", "pcm_s16le", dest],
             check=True, capture_output=True, timeout=30,
         )
-        body_wav = trimmed
-        body_d = _probe_dur(body_wav)
-        gap = max(0.15, cta_at - body_d)
-    parts = []
-    if body_wav and os.path.isfile(body_wav):
-        parts.append(body_wav)
-    silence = dest.replace(".wav", "_gap.wav")
-    subprocess.run(
-        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
-         "-t", f"{gap:.2f}", "-c:a", "pcm_s16le", silence],
-        check=True, capture_output=True, timeout=20,
-    )
-    parts.append(silence)
-    if cta_wav and os.path.isfile(cta_wav):
-        parts.append(cta_wav)
-    lst = dest.replace(".wav", "_concat.txt")
-    with open(lst, "w", encoding="utf-8") as fh:
-        for p in parts:
-            fh.write(f"file '{os.path.abspath(p)}'\n")
-    subprocess.run(
-        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c:a", "pcm_s16le", dest],
-        check=True, capture_output=True, timeout=30,
-    )
-    print(f"[voice] layout body={body_d:.1f}s gap={gap:.1f}s cta@{cta_at:.1f}s video={video_dur:.1f}s")
+    except Exception:
+        return False
+    print(f"[voice] layout body={body_d:.1f}s no-gap cta-at-end video={video_dur:.1f}s")
     return os.path.isfile(dest) and os.path.getsize(dest) > 200
+
+
+def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 2.2) -> float:
+    """Cut dead air after the script. Video ends when talk + CTA ends."""
+    body_d = _probe_dur(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
+    dur = _probe_dur(video_path)
+    if body_d < 2 or dur <= 0:
+        return dur
+    target = min(30.0, max(8.0, body_d + extra))
+    if dur <= target + 0.35:
+        return dur
+    work = video_path + ".voicefit.mp4"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path, "-t", f"{target:.2f}",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", work],
+            check=True, capture_output=True, timeout=90,
+        )
+        if os.path.isfile(work) and os.path.getsize(work) > 1000:
+            shutil.move(work, video_path)
+            print(f"[voice] trimmed video {dur:.1f}s -> {target:.1f}s (no mid pause)")
+            return target
+    except Exception as exc:
+        print(f"[voice] fit skipped: {exc}")
+    return dur
 
 
 def _tts_spoken(text: str, dest_wav: str) -> bool:
@@ -802,15 +857,15 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     req_has_code = bool(re.search(r"\b(use code|promo code|referral code)\b", blob))
     if "fisch" in blob:
         scripts = [
-            "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Fight to survive. That is the whole loop. Game is called How to Fisch on Roblox.",
-            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Game is called How to Fisch on Roblox.",
-            "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. Game is called How to Fisch on Roblox.",
+            "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Then fight to survive. That is the whole loop. Keep catching. Keep upgrading. Game is called How to Fisch on Roblox.",
+            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Watch the fight start. Game is called How to Fisch on Roblox.",
+            "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. One more catch. Game is called How to Fisch on Roblox.",
         ]
     elif "tongue" in blob:
         scripts = [
-            "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. The stages keep getting harder. Game is called Plus One Tongue Escape on Roblox.",
-            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Do not fall. Game is called Plus One Tongue Escape on Roblox.",
-            "LOOK. Grow the tongue. Swing. Escape. That is the whole game. Game is called Plus One Tongue Escape on Roblox.",
+            "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. The stages keep getting harder. Do not fall now. Game is called Plus One Tongue Escape on Roblox.",
+            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Keep swinging. Keep running. Do not fall. Game is called Plus One Tongue Escape on Roblox.",
+            "LOOK. Grow the tongue. Swing. Escape. Next stage. Longer tongue. Harder jump. That is the whole game. Game is called Plus One Tongue Escape on Roblox.",
         ]
     elif "steal" in blob and "seed" in blob:
         scripts = [
@@ -850,6 +905,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         _tts_spoken.last_words = body_words
         if not body_ok:
             raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
+        dur = _fit_video_to_voice(video_path, body_wav, extra=2.2)
         tts_ok = _layout_voice(body_wav, "", tts, dur)
         if not tts_ok:
             shutil.copy(body_wav, tts)
@@ -1371,6 +1427,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             print(f"[qc] retry {'PASS' if not qc2 else 'WARN ' + str(qc2)}")
         else:
             print("[qc] PASS motion + duration")
+        _pin_icon_thumbnail(OUTPUT_PATH)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
         print(f"[3/5] Generated metadata. Title: {meta.title}")
