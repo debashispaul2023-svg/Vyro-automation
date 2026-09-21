@@ -263,44 +263,26 @@ def _pin_icon_thumbnail(video_path: str) -> None:
         print("[thumb] no game icon — skip")
         return
     os.makedirs("work", exist_ok=True)
-    card = "work/icon_thumb.mp4"
     out = "work/with_thumb.mp4"
     try:
         subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=0x07070f:s=1080x1920:d=0.40:r=30",
-                "-i", icon,
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=0.40",
+                "ffmpeg", "-y", "-i", video_path, "-i", icon,
                 "-filter_complex",
-                "[1:v]scale=820:820:force_original_aspect_ratio=decrease,"
-                "pad=840:840:(ow-iw)/2:(oh-ih)/2:white[ic];"
-                "[0:v][ic]overlay=(W-w)/2:(H-h)/2[v]",
-                "-map", "[v]", "-map", "2:a",
+                "[1:v]scale=780:780:force_original_aspect_ratio=decrease[ic];"
+                "[0:v][ic]overlay=(W-w)/2:(H-h)/2:enable='lt(t,0.35)'[v]",
+                "-map", "[v]", "-map", "0:a?",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                "-c:a", "aac", "-ar", "44100", "-ac", "2", "-t", "0.40",
-                card,
-            ],
-            check=True, capture_output=True, timeout=40,
-        )
-        lst = "work/thumb_concat.txt"
-        with open(lst, "w", encoding="utf-8") as fh:
-            fh.write(f"file '{os.path.abspath(card)}'\n")
-            fh.write(f"file '{os.path.abspath(video_path)}'\n")
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
                 out,
             ],
-            check=True, capture_output=True, timeout=120,
+            check=True, capture_output=True, timeout=90,
         )
         if os.path.isfile(out) and os.path.getsize(out) > 1000:
             shutil.move(out, video_path)
-            print(f"[thumb] game icon is first frame ({icon})")
+            print(f"[thumb] game icon overlaid on first frame, audio kept ({icon})")
     except Exception as exc:
-        print(f"[thumb] icon card failed: {exc}")
+        print(f"[thumb] icon overlay failed: {exc}")
 
 
 
@@ -628,10 +610,12 @@ def _caption_groups(words: list[dict], script: str) -> list[tuple[float, float, 
     """3-4 word groups. Next line waits until the current one ends."""
     tokens = []
     for w in words or []:
-        txt = re.sub(r"[^\w+#']+", "", str(w.get("text") or ""))
-        if not txt:
-            continue
-        tokens.append((float(w.get("start") or 0), float(w.get("end") or 0), txt))
+        raw = str(w.get("text") or "").replace("\n", " ")
+        raw = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", raw)
+        for piece in raw.split():
+            txt = re.sub(r"[^\w+#']+", "", piece)
+            if txt:
+                tokens.append((float(w.get("start") or 0), float(w.get("end") or 0), txt))
     if not tokens:
         raw = [s for s in re.split(r"\s+", script or "") if s]
         t = 0.0
@@ -1015,7 +999,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             "-filter_complex", draw + ";" + audio,
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-            "-c:a", "aac", "-t", f"{dur:.2f}", work,
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+            "-t", f"{dur:.2f}", work,
         ]
     elif icon:
         ff += ["-filter_complex", draw, "-map", "[v]", "-c:a", "copy",
@@ -1035,7 +1020,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             f"[0:v]{draw}[v];" + audio,
             "-map", "[v]", "-map", "[a]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-            "-c:a", "aac", "-t", f"{dur:.2f}", work,
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+            "-t", f"{dur:.2f}", work,
         ]
     else:
         ff += ["-vf", draw, "-c:a", "copy", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", work]
@@ -1057,7 +1043,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
                 "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
                 "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-                "-c:a", "aac", "-shortest", work,
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", work,
             ]
         else:
             simple += ["-vf", caption_vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
