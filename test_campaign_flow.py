@@ -42,6 +42,8 @@ def main() -> int:
     dr.upload_reel = _block_instagram
     dr._submit_back = _block_submit
     os.environ["VYRO_SKIP_UPLOAD"] = "1"
+    os.environ["CLIP_REUSE"] = "1"
+    print("[test] CLIP_REUSE=1 — old clips allowed (no upload)")
 
     print(f"GOOGLE_DRIVE_API_KEY present: {bool((os.environ.get('GOOGLE_DRIVE_API_KEY') or '').strip())}")
     print(f"WHOP_COOKIE_HEADER present: {bool((os.environ.get('WHOP_COOKIE_HEADER') or '').strip())}")
