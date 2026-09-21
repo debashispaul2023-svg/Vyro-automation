@@ -49,7 +49,7 @@ jobs:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
-          WHOP_ENABLE_DISCOVER: "1"
+          WHOP_ENABLE_DISCOVER: "0"
         run: python test_campaign_flow.py
 
       - name: Publish raw short.mp4
