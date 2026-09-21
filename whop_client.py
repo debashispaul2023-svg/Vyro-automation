@@ -687,6 +687,19 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
             if newly_joined:
                 _save_new_campaign_urls(newly_joined)
                 return newly_joined
+            try:
+                _open_campaigns_grid(page)
+                grid_txt = ""
+                try:
+                    grid_txt = _discover_root(page).inner_text("body")
+                except Exception:
+                    grid_txt = page.inner_text("body")
+                low = (grid_txt or "").lower()
+                if "tongue escape" in low or "how to fisch" in low:
+                    print("[whop] board already has Fisch/Tongue — skip Discover $ cards")
+                    return newly_joined
+            except Exception:
+                pass
             card_texts = page.locator("not-a-real-thing")
             card_count = 0
 
