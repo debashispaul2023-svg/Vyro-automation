@@ -320,10 +320,15 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
             return float(c.get("duration_ms") or 0)
         except (TypeError, ValueError):
             return 0.0
-    unused = [c for c in unused if _ms(c) >= 10000]
+    long = [c for c in unused if _ms(c) >= 10000]
+    if not long:
+        print("[clips] no unused 10s+ clip — packing remaining shorts")
+        pool = unused
+    else:
+        pool = long
     best_by_num: dict[int, dict] = {}
     leftovers = []
-    for c in unused:
+    for c in pool:
         name = c.get("name") or ""
         m = re.search(r"(\d+)", name)
         if not m:
@@ -333,19 +338,21 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         prev = best_by_num.get(num)
         if prev is None or _ms(c) > _ms(prev):
             best_by_num[num] = c
-    unused = list(best_by_num.values()) + leftovers
-    unused.sort(key=_clip_sort_key)
+    pool = list(best_by_num.values()) + leftovers
+    pool.sort(key=lambda c: (-_ms(c), _clip_sort_key(c)))
     pack = []
-    if first and any(c["clip_id"] == first["clip_id"] for c in unused):
+    if first and any(c["clip_id"] == first["clip_id"] for c in pool):
         pack.append(first)
-    for c in unused:
-        if pack and c["clip_id"] == pack[0]["clip_id"]:
+    elif first and first.get("clip_id"):
+        pack.append(first)
+    for c in pool:
+        if any(p["clip_id"] == c["clip_id"] for p in pack):
             continue
         pack.append(c)
         if len(pack) >= want:
             break
-    if not pack and unused:
-        pack = unused[:want]
+    if not pack and pool:
+        pack = pool[:want]
     print(f"[clips] merge pack ({len(pack)}): " + ", ".join(x.get("name") or x["clip_id"] for x in pack))
     return pack
 
@@ -465,9 +472,10 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     if long_enough:
         print(f"[clips] dropped {len(pool) - len(long_enough)} clips under 10s")
         pool = long_enough
+        pool.sort(key=_clip_sort_key)
     else:
-        print("[clips] no 10s+ clip left; using remaining pool")
-    pool.sort(key=_clip_sort_key)
+        print("[clips] no 10s+ clip left; using longest remaining shorts")
+        pool.sort(key=lambda c: -float(c.get("duration_ms") or 0))
     print(f"[clips] next unused by number: {pool[0].get('name')} ({len(pool)} left)")
     clip = pool[0]
     print(f"[clips] next unused: {clip.get('name') or clip['clip_id']} ({clip['kind']})")
@@ -794,7 +802,7 @@ def _lock_plan_from_rules(rules: str, plan: dict | None) -> dict:
     low = (rules or "").lower()
     out = dict(plan or {})
     out["ready_to_upload"] = False
-    if any(w in low for w in ("spoken", "must be spoken", "voice", "say the name")):
+    if any(w in low for w in ("spoken", "must be spoken", "voice", "say the name", "roblox", "fisch", "tongue")):
         out["need_spoken_voice"] = True
     if any(w in low for w in ("icon", "visibly shown", "game title", "shown somewhere")):
         out["need_end_icon"] = True
@@ -848,10 +856,10 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     """Fisch: spoken name + end CTA. Keeps original gameplay audio."""
     blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}".lower()
     plan = getattr(campaign, "_edit_plan", None) or {}
-    if plan.get("ready_to_upload"):
-        return
-    if plan and not (plan.get("need_spoken_voice") or plan.get("need_captions") or plan.get("need_end_icon")):
-        return
+    plan["ready_to_upload"] = False
+    if any(w in blob for w in ("roblox", "fisch", "tongue", "spoken")):
+        plan["need_spoken_voice"] = True
+        plan["need_captions"] = True
     game = (plan.get("speak_text") or campaign.name or "this Roblox game").strip()
     cta = (plan.get("cta_text") or f"Game is called {game} on Roblox").strip()
     req_has_code = bool(re.search(r"\b(use code|promo code|referral code)\b", blob))
@@ -885,8 +893,6 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     spoken = scripts[used_n % len(scripts)]
     print(f"[voice] script variant {used_n % len(scripts) + 1}/{len(scripts)}")
     _tts_spoken.last_words = []
-    if plan and not plan.get("need_spoken_voice"):
-        spoken = ""
     work = "output/fisch_pack.mp4"
     tts = "output/fisch_tts.wav"
     body_wav = "output/fisch_body.wav"
@@ -997,11 +1003,11 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     a_tts = 2 if icon else 1
     a_cta = a_tts + 1
     if icon and tts_ok:
-        audio = f"[0:a]volume=0.32[ag];[{a_tts}:a]volume=1.4[ab];"
+        audio = f"[0:a]volume=0.12[ag];[{a_tts}:a]volume=2.1[ab];"
         if extra_a >= 2:
             audio += (
-                f"[{a_cta}:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
-                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0[a]"
+                f"[{a_cta}:a]adelay={cta_ms}|{cta_ms},volume=2.0[ac];"
+                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]"
             )
         else:
             audio += "[ag][ab]amix=inputs=2:duration=first:dropout_transition=0[a]"
@@ -1016,7 +1022,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
                "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
                "-t", f"{dur:.2f}", work]
     elif tts_ok:
-        audio = f"[0:a]volume=0.32[ag];[1:a]volume=1.4[ab];"
+        audio = f"[0:a]volume=0.12[ag];[1:a]volume=2.1[ab];"
         if extra_a >= 2:
             audio += (
                 f"[2:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
@@ -1047,7 +1053,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             simple += [
                 "-i", tts,
                 "-filter_complex",
-                f"[0:v]{caption_vf}[v];[0:a]volume=0.35[a0];[1:a]volume=1.35[a1];"
+                f"[0:v]{caption_vf}[v];[0:a]volume=0.12[a0];[1:a]volume=2.1[a1];"
                 "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
                 "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
