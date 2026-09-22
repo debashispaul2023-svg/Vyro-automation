@@ -606,6 +606,27 @@ def _zoom_cuts(path: str) -> None:
         print(f"[edit] zoom skipped: {exc}")
 
 
+def _assert_voice_audio(path: str) -> None:
+    """Refuse almost-silent AAC (the 1 kb/s bug)."""
+    if not os.path.isfile(path):
+        raise RuntimeError("output missing after voice pack")
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=bit_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+        br = int((probe.stdout or "0").strip().split("\n")[0] or "0")
+    except Exception:
+        br = 0
+    print(f"[voice] output audio bitrate={br}")
+    if br and br < 24000:
+        raise RuntimeError(f"voice mix too thin ({br} bps) — refusing silent export")
+
+
 def _caption_groups(words: list[dict], script: str) -> list[tuple[float, float, str]]:
     """3-4 word groups. Next line waits until the current one ends."""
     tokens = []
@@ -658,7 +679,7 @@ def _hook_line(blob: str) -> str:
 
 def _end_cta_line(blob: str) -> str:
     low = (blob or "").lower()
-    if re.search(r"\b(code|codes|promo)\b", low):
+    if re.search(r"\buse code\b|\bpromo code\b", low):
         return "Follow for more codes"
     return "Follow for more"
 
@@ -901,13 +922,26 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
             shutil.copy(body_wav, tts)
             tts_ok = True
     words = list(getattr(_tts_spoken, "last_words", []) or [])
-    groups = _caption_groups(words, spoken)
+    groups = phrases_from_words(words, spoken) or _caption_groups(words, spoken)
+    flat = []
+    for a, b, line in groups:
+        parts = [p for p in re.split(r"\s+", line) if p]
+        if len(parts) <= 4:
+            flat.append((a, b, " ".join(parts)))
+            continue
+        span = max(0.4, (b - a) / max(1, (len(parts) + 3) // 4))
+        t = a
+        for i in range(0, len(parts), 4):
+            chunk = parts[i:i + 4]
+            flat.append((t, min(b, t + span), " ".join(chunk)))
+            t += span
+    groups = flat
     font = _font()
     hook_txt = _hook_line(blob)
     end_cta = _end_cta_line(blob)
     # last 2s reserved for CTA — captions must end before that
     cta_a = max(0.0, dur - 2.0)
-    hook_b = min(2.2, cta_a - 0.15)
+    hook_b = min(1.5, max(1.0, cta_a - 0.15))
     parts = []
     safe_hook = hook_txt.replace("\\", " ").replace("'", "").replace(":", " -")[:36]
     parts.append(
@@ -923,7 +957,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         b = min(b, cta_a - 0.05)
         if b <= a:
             continue
-        safe = txt.replace("\\", " ").replace("'", "").replace(":", " -").replace("\n", "\\n")[:40]
+        safe = re.sub(r"\s+", " ", txt.replace("\\", " ").replace("\n", " ").replace("'", ""))
+        safe = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", safe).replace(":", " -")[:42]
         # ~25% from bottom, max 2 lines already wrapped, 80% width via fontsize
         parts.append(
             f"drawtext={font}text='{safe}':fontcolor=white:fontsize=56:"
@@ -991,10 +1026,10 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         if extra_a >= 2:
             audio += (
                 f"[{a_cta}:a]adelay={cta_ms}|{cta_ms},volume=2.0[ac];"
-                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]"
+                "[ag][ab][ac]amix=inputs=3:duration=longest:dropout_transition=0:normalize=0[a]"
             )
         else:
-            audio += "[ag][ab]amix=inputs=2:duration=first:dropout_transition=0[a]"
+            audio += "[ag][ab]amix=inputs=2:duration=longest:dropout_transition=0[a]"
         ff += [
             "-filter_complex", draw + ";" + audio,
             "-map", "[v]", "-map", "[a]",
@@ -1011,10 +1046,10 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         if extra_a >= 2:
             audio += (
                 f"[2:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
-                "[ag][ab][ac]amix=inputs=3:duration=first:dropout_transition=0[a]"
+                "[ag][ab][ac]amix=inputs=3:duration=longest:dropout_transition=0[a]"
             )
         else:
-            audio += "[ag][ab]amix=inputs=2:duration=first:dropout_transition=0[a]"
+            audio += "[ag][ab]amix=inputs=2:duration=longest:dropout_transition=0[a]"
         ff += [
             "-filter_complex",
             f"[0:v]{draw}[v];" + audio,
@@ -1040,7 +1075,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
                 "-i", tts,
                 "-filter_complex",
                 f"[0:v]{caption_vf}[v];[0:a]volume=0.12[a0];[1:a]volume=2.1[a1];"
-                "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+                "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0[a]",
                 "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
                 "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", work,
@@ -1057,6 +1092,8 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
                 raise RuntimeError("simple pack missing")
         except Exception as exc2:
             raise RuntimeError(f"voice/caption burn failed: {exc2}") from exc2
+    if tts_ok:
+        _assert_voice_audio(video_path)
 
 
 def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetadata) -> str:
