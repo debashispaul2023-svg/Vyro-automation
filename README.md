@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="160" alt="Vyro">
+  <img src="vyro.png" width="160" alt="Vyro">
 </p>
 
 <h1 align="center">Vyro Automation</h1>
