@@ -1,3 +1,15 @@
+<p align="center">
+  <img src="logo.png" width="160" alt="Vyro">
+</p>
+
+<h1 align="center">Vyro Automation</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Instagram-Main-E4405F?style=for-the-badge">
+  <img src="https://img.shields.io/badge/YouTube-Backup-FF0000?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge">
+  <img src="https://img.shields.io/github/actions/workflow/status/debashispaul2023-svg/Vyro-automation/vyro_daily.yml?style=for-the-badge">
+</p>
 # Vyro-automation
 
 Daily GitHub Actions bot that finds a **BloxClips / Whop** campaign, reads the brief, merges Drive footage, burns captions + ElevenLabs voice + end stickers, uploads **Instagram first** then YouTube backup, and auto-submits both links on Whop.
