@@ -4,12 +4,17 @@
     "forge gui"
   ],
   "allow_name_markers": [
+    "money roll",
     "tongue escape",
     "steal a seed",
     "world athletics",
     "how to fisch"
   ],
   "joined_campaigns": [
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "+1 Money Roll To Get Rich"
+    },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "+1 Tongue Escape",

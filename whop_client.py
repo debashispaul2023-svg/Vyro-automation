@@ -501,13 +501,31 @@ def _harvest_asset_links(frame, page, body_text: str) -> tuple[str, str]:
 
 
 def _save_new_campaign_urls(new_urls: list[str]) -> None:
-    configured = _load_configured_campaigns()
-    existing_urls = {entry["url"] for entry in configured}
+    raw: dict = {"skip_name_markers": ["forgegui", "forge gui"], "allow_name_markers": [], "joined_campaigns": []}
+    if os.path.isfile(CAMPAIGNS_CONFIG_PATH):
+        try:
+            with open(CAMPAIGNS_CONFIG_PATH, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                raw.update(loaded)
+        except Exception:
+            pass
+    configured = list(raw.get("joined_campaigns") or [])
+    existing_urls = {entry.get("url") for entry in configured}
+    existing_names = {(entry.get("name_hint") or "").lower() for entry in configured}
     for url in new_urls:
-        if url not in existing_urls:
-            configured.append({"url": url, "name_hint": ""})
+        if url and url not in existing_urls:
+            hint = "Money Roll" if "money" in url.lower() else ""
+            configured.append({"url": url, "name_hint": hint})
+            existing_urls.add(url)
+    if "money roll" not in existing_names:
+        configured.insert(0, {
+            "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+            "name_hint": "+1 Money Roll To Get Rich",
+        })
+    raw["joined_campaigns"] = configured
     with open(CAMPAIGNS_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"joined_campaigns": configured}, f, indent=2)
+        json.dump(raw, f, indent=2)
 
 
 def _normalize_campaign_url(url: str) -> str:
@@ -615,6 +633,8 @@ def _open_named_board_campaign(page: Page, title: str) -> bool:
         needles += ["Athletics", "WORLD ATHLETICS"]
     if "fisch" in title.lower():
         needles += ["Fisch", "HOW TO FISCH"]
+    if "money" in title.lower() or "roll" in title.lower():
+        needles += ["Money Roll", "+1 Money", "Get Rich", "Fortnite Map"]
     for root in [frame, page] + list(page.frames):
         for needle in needles:
             try:
@@ -653,7 +673,13 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 return newly_joined
 
             frame = _open_campaigns_grid(page)
-            named = ("Tongue Escape", "Steal A Seed", "World Athletics")
+            named = (
+                "Money Roll",
+                "+1 Money Roll To Get Rich",
+                "Tongue Escape",
+                "Steal A Seed",
+                "World Athletics",
+            )
             for title in named:
                 try:
                     print(f"[whop] board click '{title}'")
@@ -695,9 +721,10 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
                 except Exception:
                     grid_txt = page.inner_text("body")
                 low = (grid_txt or "").lower()
-                if "tongue escape" in low or "how to fisch" in low:
-                    print("[whop] board already has Fisch/Tongue — skip Discover $ cards")
-                    return newly_joined
+                if "money roll" in low:
+                    print("[whop] board shows Money Roll — will open that card")
+                elif "tongue escape" in low or "how to fisch" in low:
+                    print("[whop] board still has Fisch/Tongue — still scan for newer cards")
             except Exception:
                 pass
             card_texts = page.locator("not-a-real-thing")
@@ -838,6 +865,8 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
         cid = "how-to-fisch"
     elif "tongue" in name.lower():
         cid = "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a"
+    elif "money" in name.lower() or "roll" in name.lower():
+        cid = "money-roll"
     rules = name
     if "fisch" in name.lower():
         rules = (
@@ -858,6 +887,14 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "Only Roblox accounts may upload. English-based. 1% engagement minimum.\n"
             "Codes: WELCOME1, BONUS500, FREEBOOST.\n"
             "https://www.roblox.com/games/122245938604556/1-Tongue-Escape"
+        )
+    elif "money" in name.lower() or "roll" in name.lower():
+        rules = (
+            f"{name}\n"
+            "The name +1 Money Roll To Get Rich must be spoken somewhere in the video.\n"
+            "Show the Money Roll game icon or title card.\n"
+            "A clear CTA must be included. Example: Game is called Money Roll To Get Rich on Fortnite.\n"
+            "English-based. Follow the campaign brief exactly."
         )
     elif "seed" in name.lower():
         cid = "steal-a-seed"
@@ -899,10 +936,11 @@ def _looks_like_whop_chrome(text: str) -> bool:
     return False
 
 
-def check_configured_campaigns() -> Optional[WhopCampaign]:
+def check_configured_campaigns(skip_ids: set[str] | None = None) -> Optional[WhopCampaign]:
     configured = _load_configured_campaigns()
     if not configured:
         return None
+    skip_ids = {str(x).lower() for x in (skip_ids or set())}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -926,6 +964,19 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                     campaign = _campaign_from_config(entry)
                 if campaign is None:
                     continue
+                ident = " ".join(
+                    str(x)
+                    for x in (
+                        campaign.campaign_id,
+                        entry.get("campaign_uuid"),
+                        campaign.name,
+                        name_hint,
+                    )
+                    if x
+                ).lower()
+                if skip_ids and any(s and s in ident for s in skip_ids):
+                    print(f"[whop] skip exhausted/closed '{campaign.name}'")
+                    continue
                 extra = (entry.get("source_clip_url") or "").strip()
                 if extra:
                     campaign.source_clip_url = extra
@@ -946,6 +997,11 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
                     print("[whop] How to Fisch saved as last resort — trying newer BloxClips campaigns first")
                     fisch_last = campaign
                     continue
+                if "money roll" in blob or "money-roll" in blob:
+                    print(f"[whop] preferring new board campaign '{campaign.name}'")
+                    if not has_assets:
+                        print("[whop] Money Roll has no Drive folder in JSON yet — open the card and send the footage link")
+                    return campaign
                 if not has_assets:
                     print(f"[whop] '{campaign.name}' has no Drive/Doc yet — skip to next card")
                     continue
