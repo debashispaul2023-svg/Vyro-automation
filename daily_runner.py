@@ -296,7 +296,15 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         c for c in clips
         if not _clip_already_used(log, campaign.campaign_id, c["clip_id"], c.get("name") or "")
         and c.get("kind") in ("drive_file", "direct")
+        and "youtu" not in (c.get("url") or "").lower()
     ]
+    if not unused:
+        unused = [
+            c for c in clips
+            if c.get("kind") in ("drive_file", "direct")
+            and "youtu" not in (c.get("url") or "").lower()
+        ]
+        print("[clips] pack recycling used Drive clips")
     def _ms(c):
         try:
             return float(c.get("duration_ms") or 0)
@@ -433,16 +441,31 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
     clips = _list_campaign_clips(campaign)
     if not clips:
         return None
-    unused = [
+    official = [
         clip
         for clip in clips
+        if clip.get("kind") in ("drive_file", "direct")
+        and "youtu" not in (clip.get("url") or "").lower()
+        and "youtu" not in (clip.get("name") or "").lower()
+        and "evmqcupt" not in (clip.get("clip_id") or "").lower()
+    ]
+    unused = [
+        clip
+        for clip in official
         if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"], clip.get("name") or "")
     ]
     if not unused:
-        print(f"[clips] all {len(clips)} content-folder clips already used for this campaign.")
-        return None
-    usable = [c for c in unused if c.get("kind") in ("drive_file", "drive_folder", "direct")]
-    pool = usable or unused
+        print(f"[clips] all {len(official)} Drive clips used — recycling folder (new combo).")
+        unused = official
+        if not unused:
+            return None
+        used_n = len([
+            r for r in (log.get("clips") or [])
+            if r.get("campaign_id") == campaign.campaign_id
+        ])
+        shift = used_n % len(unused)
+        unused = unused[shift:] + unused[:shift]
+    pool = unused
     long_enough = []
     for c in pool:
         try:
@@ -744,7 +767,11 @@ def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 2.2) -> f
     dur = _probe_dur(video_path)
     if body_d < 2 or dur <= 0:
         return dur
-    target = min(30.0, max(8.0, body_d + extra))
+    # Campaign check is 15s minimum. Never shrink a valid short under 16s.
+    target = min(30.0, max(16.5, body_d + extra))
+    if dur < 15.5:
+        print(f"[voice] source {dur:.1f}s already under 15s — not trimming further")
+        return dur
     if dur <= target + 0.35:
         return dur
     work = video_path + ".voicefit.mp4"
@@ -882,8 +909,9 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         ]
     elif "steal" in blob and "seed" in blob:
         scripts = [
-            "WAIT. This Roblox game is actually wild. You sneak in. You steal a seed. Then you run. Game is called Steal A Seed on Roblox.",
-            "YO. Watch this. Grab the seed and get out before they catch you. Game is called Steal A Seed on Roblox.",
+            "WAIT. This Roblox game is actually wild. You sneak into their garden. You steal a seed. You plant it. You grow faster. Then you run before they catch you. People chase you. Do not get caught. That loop slaps. Game is called Steal a Seed on Roblox.",
+            "YO. Watch this. Grab the seed. Get out. Plant it on your side. Grow. Get faster. Then steal again. That is the whole game. Game is called Steal a Seed on Roblox.",
+            "LOOK. In this Roblox game you steal seeds to grow your garden and get faster. Sneak in. Take the seed. Escape. Grow. Repeat. Game is called Steal a Seed on Roblox.",
         ]
     else:
         scripts = [
@@ -1222,7 +1250,7 @@ def _screen_campaign(platform: str, campaign: Campaign) -> bool:
     return True
 
 
-def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
+def _find_campaign(skip_ids: set[str] | None = None) -> tuple[str, Campaign] | tuple[None, None]:
     """Checks Vyro first, then every configured Whop campaign. Skips any
     campaign that fails the AI quality screen and tries the next source."""
     try:
@@ -1245,7 +1273,7 @@ def _find_campaign() -> tuple[str, Campaign] | tuple[None, None]:
         print("[whop] Discover auto-join off (set WHOP_ENABLE_DISCOVER=1 to turn on).")
 
     try:
-        whop_campaign = whop_check_configured_campaigns()
+        whop_campaign = whop_check_configured_campaigns(skip_ids=skip_ids)
     except WhopClientError as exc:
         print(f"Whop check failed: {exc}", file=sys.stderr)
         whop_campaign = None
@@ -1547,34 +1575,58 @@ def main() -> int:
     if (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes"):
         print("[clips] CLIP_REUSE=1 — old folder clips can be picked again")
 
-    platform, campaign = _find_campaign()
+    skip_ids = {str(x).lower() for x in (clip_log.get("closed_campaigns") or [])}
+    platform, campaign = None, None
+    pack: list[dict] = []
+    for _attempt in range(6):
+        platform, campaign = _find_campaign(skip_ids=skip_ids)
+        if campaign is None:
+            break
+        print(f"Found active campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
+        if campaign.campaign_id in set(clip_log.get("closed_campaigns") or []):
+            print(f"Campaign '{campaign.campaign_id}' is closed — next card.")
+            skip_ids.add(str(campaign.campaign_id).lower())
+            skip_ids.add((campaign.name or "").lower())
+            continue
+        _refuse_mixed_footage(campaign)
+        blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
+        ratio = _budget_used_ratio(blob)
+        if ratio is not None:
+            print(f"[budget] {campaign.name} used {ratio:.0%}")
+            if ratio >= BUDGET_CLOSE_RATIO:
+                _close_spent_campaign(clip_log, campaign, ratio)
+                skip_ids.add(str(campaign.campaign_id).lower())
+                skip_ids.add((campaign.name or "").lower())
+                print("Budget spent — trying the next board campaign.")
+                continue
+        print(
+            f"[lock] clip+submit ONLY '{campaign.name}' "
+            f"id={campaign.campaign_id} footage={(campaign.source_clip_url or '')[:60]}"
+        )
+        pack = _next_unused_pack(campaign, clip_log, want=4)
+        drive_pack = [
+            c for c in pack
+            if c.get("kind") in ("drive_file", "direct")
+            and "youtu" not in (c.get("url") or "").lower()
+        ]
+        unused_only = [
+            c for c in drive_pack
+            if not _clip_already_used(clip_log, campaign.campaign_id, c["clip_id"], c.get("name") or "")
+        ]
+        if unused_only:
+            pack = unused_only[:4]
+            break
+        print(f"[clips] '{campaign.name}' folder already used up — next campaign on the board.")
+        skip_ids.add(str(campaign.campaign_id).lower())
+        skip_ids.add((campaign.name or "").lower())
+        pack = []
+        campaign = None
 
     if campaign is None:
         print("No usable active campaign today on Vyro or Whop. Exiting.")
         return 0
-
-    if campaign.campaign_id in set(clip_log.get("closed_campaigns") or []):
-        print(f"Campaign '{campaign.campaign_id}' is closed. Ignoring its folder forever.")
-        return 0
-
-    print(f"Found active campaign on {platform}: {campaign.campaign_id} — {campaign.name}")
-    _refuse_mixed_footage(campaign)
-    blob = f"{campaign.name or ''}\n{campaign.requirements_text or ''}"
-    ratio = _budget_used_ratio(blob)
-    if ratio is not None:
-        print(f"[budget] {campaign.name} used {ratio:.0%}")
-        if ratio >= BUDGET_CLOSE_RATIO:
-            _close_spent_campaign(clip_log, campaign, ratio)
-            print("Pick another campaign tomorrow. This one is done.")
-            return 0
-    print(
-        f"[lock] clip+submit ONLY '{campaign.name}' "
-        f"id={campaign.campaign_id} footage={(campaign.source_clip_url or '')[:60]}"
-    )
-
-    pack = _next_unused_pack(campaign, clip_log, want=4)
     if not pack:
-        print("No unused Content Folder clip left on this campaign (or folder unreadable).")
+        print("Every configured campaign is out of unused Drive clips. Exiting.")
         return 0
     campaign._merge_pack = pack  # type: ignore[attr-defined]
     nxt = pack[0]
