@@ -1,11 +1,10 @@
 {
   "skip_name_markers": [
     "forgegui",
-    "forge gui"
+    "forge gui",
+    "money roll"
   ],
   "allow_name_markers": [
-    "money roll",
-    "tongue escape",
     "steal a seed",
     "world athletics",
     "how to fisch"
@@ -13,19 +12,10 @@
   "joined_campaigns": [
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "+1 Money Roll To Get Rich"
-    },
-    {
-      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "+1 Tongue Escape",
-      "game_link": "https://www.roblox.com/games/122245938604556/1-Tongue-Escape",
-      "reference_doc_url": "https://docs.google.com/document/d/1raaJ_b8zvqUk63GrhvCjWhl14zbZWe1pRCNGvrRanuA/edit?usp=sharing",
-      "source_clip_url": "https://drive.google.com/drive/folders/1tpGYBan06R8AOwq4oobvBx5C-3r33lP7",
-      "campaign_uuid": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a"
-    },
-    {
-      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
-      "name_hint": "Steal A Seed"
+      "name_hint": "Steal A Seed",
+      "campaign_uuid": "ad06c6d9-d46f-4b03-9bf8-58bf8a09cf5b",
+      "game_link": "https://www.roblox.com/games/122216176958450/Steal-A-Seed",
+      "reference_doc_url": "https://docs.google.com/document/d/1_uRkFnaA19VbKAd4aniWIwbA_5Uppv6095_c6tMqcBA/edit?usp=sharing"
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",

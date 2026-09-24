@@ -900,10 +900,12 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
         cid = "steal-a-seed"
         rules = (
             f"{name}\n"
-            "The name Steal A Seed must be spoken somewhere in the video.\n"
-            "The Steal A Seed game icon must be visibly shown.\n"
-            "A clear CTA must be included. Example: Game is called Steal A Seed on Roblox.\n"
-            "Only Roblox accounts. English-based."
+            "The name Steal a Seed must be spoken somewhere in the video.\n"
+            "The Steal a Seed game icon must be visibly shown at the end of the video.\n"
+            "A clear CTA must be included. Example: Game is called Steal a Seed on Roblox.\n"
+            "Only Roblox accounts. English-based. 1% engagement minimum.\n"
+            "In-game codes: ADMINABUSE, FREEZING, 35KLIKES.\n"
+            "https://www.roblox.com/games/122216176958450/Steal-A-Seed"
         )
     elif "athletics" in name.lower():
         cid = "world-athletics"
@@ -993,14 +995,20 @@ def check_configured_campaigns(skip_ids: set[str] | None = None) -> Optional[Who
                         )
                 blob = f"{campaign.name} {name_hint}".lower()
                 has_assets = bool((campaign.source_clip_url or "").strip() or (campaign.reference_doc_url or "").strip())
-                if "fisch" in blob:
-                    print("[whop] How to Fisch saved as last resort — trying newer BloxClips campaigns first")
-                    fisch_last = campaign
+                if "tongue" in blob:
+                    print("[whop] Tongue Escape marked complete — skip")
                     continue
                 if "money roll" in blob or "money-roll" in blob:
-                    print(f"[whop] preferring new board campaign '{campaign.name}'")
+                    print("[whop] Money Roll is Fortnite-account only — skip on this Roblox pipeline")
+                    continue
+                if "fisch" in blob:
+                    print("[whop] How to Fisch saved as last resort — trying Steal A Seed first")
+                    fisch_last = campaign
+                    continue
+                if "steal" in blob and "seed" in blob:
+                    print(f"[whop] selected Steal A Seed doc={campaign.reference_doc_url or '(none)'}")
                     if not has_assets:
-                        print("[whop] Money Roll has no Drive folder in JSON yet — open the card and send the footage link")
+                        print("[whop] Steal A Seed doc/folder still missing — open Footage Assets in the brief")
                     return campaign
                 if not has_assets:
                     print(f"[whop] '{campaign.name}' has no Drive/Doc yet — skip to next card")
