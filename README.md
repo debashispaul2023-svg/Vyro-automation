@@ -1,16 +1,18 @@
 <p align="center">
-  <img src="vyro.png" width="160" alt="Vyro">
+  <img src="logo.png" width="160" alt="Vyro">
 </p>
 
 <h1 align="center">Vyro Automation</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Instagram-Main-E4405F?style=for-the-badge">
-  <img src="https://img.shields.io/badge/YouTube-Backup-FF0000?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge">
-  <img src="https://img.shields.io/github/actions/workflow/status/debashispaul2023-svg/Vyro-automation/vyro_daily.yml?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Instagram-Main-E4405F?style=for-the-badge" alt="Instagram">
+  <img src="https://img.shields.io/badge/YouTube-Backup-FF0000?style=for-the-badge" alt="YouTube">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge" alt="Python">
 </p>
+
 # Vyro-automation
+
+**Apply once:** unzip `Vyro-automation-final.zip`, copy the files from `vyro-final/` onto the repo root (not as a nested folder). Delete `daily_runner-1.py` and `whop_client-1.py` if they still exist. Commit everything in **one** push.
 
 Daily GitHub Actions bot that finds a **BloxClips / Whop** campaign, reads the brief, merges Drive footage, burns captions + ElevenLabs voice + end stickers, uploads **Instagram first** then YouTube backup, and auto-submits both links on Whop.
 
