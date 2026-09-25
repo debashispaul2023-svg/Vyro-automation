@@ -555,13 +555,13 @@ def _prep_footage(path: str) -> None:
     if dur < 4:
         return
     os.makedirs("work", exist_ok=True)
-    hook_at = _best_action_start(path, 2.6)
+    hook_at = _best_action_start(path, 2.0)
     hooked = "work/hooked.mp4"
-    if hook_at >= 0.45:
+    if hook_at >= 0.35:
         hook = "work/hook.mp4"
         rest = "work/rest.mp4"
         subprocess.run(
-            ["ffmpeg", "-y", "-ss", f"{hook_at:.2f}", "-t", "2.60", "-i", path,
+            ["ffmpeg", "-y", "-ss", f"{hook_at:.2f}", "-t", "2.00", "-i", path,
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", hook],
             capture_output=True, timeout=60,
         )
@@ -580,7 +580,7 @@ def _prep_footage(path: str) -> None:
         )
         if os.path.isfile(hooked) and os.path.getsize(hooked) > 1000:
             shutil.move(hooked, path)
-            print("[hook] 2.6s action packed at start")
+            print("[hook] 2.0s action packed at start")
     # Drop near-duplicate / static frames so the cut keeps moving
     live = "work/live.mp4"
     try:
@@ -696,15 +696,19 @@ def _hook_line(blob: str) -> str:
     if "fisch" in low:
         return "Catch fish. Then FIGHT."
     if "steal" in low and "seed" in low:
-        return "Steal the seed. RUN."
-    return "Watch this!"
+        return "STEAL THE SEED"
+    return "WAIT. Watch this."
 
 
 def _end_cta_line(blob: str) -> str:
     low = (blob or "").lower()
+    if "steal" in low and "seed" in low:
+        return "Steal a Seed on Roblox"
+    if "fisch" in low:
+        return "How to Fisch on Roblox"
     if re.search(r"\buse code\b|\bpromo code\b", low):
         return "Follow for more codes"
-    return "Follow for more"
+    return "Play it on Roblox"
 
 
 def _loudnorm(path: str) -> None:
@@ -969,7 +973,7 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     end_cta = _end_cta_line(blob)
     # last 2s reserved for CTA — captions must end before that
     cta_a = max(0.0, dur - 2.0)
-    hook_b = min(1.5, max(1.0, cta_a - 0.15))
+    hook_b = min(1.15, max(0.9, cta_a - 0.15))
     parts = []
     safe_hook = hook_txt.replace("\\", " ").replace("'", "").replace(":", " -")[:36]
     parts.append(
@@ -1141,8 +1145,14 @@ def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetada
     elif "modern warfare" in raw_l or "mw4" in raw_l:
         body = "MW4 multiplayer beta gameplay — drop in and play"
         extras = ["#COD", "#MW4", "#CallOfDuty"]
+    elif "steal" in raw_l and "seed" in raw_l:
+        body = (
+            "You sneak in. You steal a seed. You run.\n"
+            "Game is called Steal a Seed on Roblox."
+        )
+        extras = ["#Roblox", "#StealASeed"]
     elif "roblox" in raw_l:
-        body = "Roblox gameplay clip"
+        body = "New Roblox game — watch before you play."
         extras = ["#Roblox", "#RobloxClips"]
     else:
         title = re.sub(r"#\S+", "", meta.title or campaign.name or "New clip").strip()
