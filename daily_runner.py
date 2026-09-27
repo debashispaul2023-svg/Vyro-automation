@@ -531,18 +531,23 @@ def _scene_times(path: str, thresh: float = 0.10) -> list[float]:
 
 
 def _best_action_start(path: str, window: float = 2.6) -> float:
-    """Start time of the 2-3s window with the most scene cuts."""
-    cuts = _scene_times(path, 0.10)
+    """Start time of the 2-3s window with the most scene cuts.
+
+    Skip the first ~3s — Roblox clips often open on inventory / shop UI.
+    """
+    cuts = _scene_times(path, 0.18)
     dur = _probe_dur(path)
     if not cuts or dur < window + 0.4:
-        return 0.0
+        return min(3.0, max(0.0, dur * 0.25))
     best_t, best_n = 0.0, -1
-    t = 0.0
+    t = 3.0 if dur > 8 else 0.0
     while t + window <= dur + 0.01:
         n = sum(1 for c in cuts if t <= c < t + window)
         if n > best_n:
             best_n, best_t = n, t
         t += 0.35
+    if best_n < 1:
+        best_t = min(3.0, max(0.0, dur * 0.3))
     print(f"[hook] action window @{best_t:.2f}s ({best_n} cuts)")
     return best_t
 
@@ -565,8 +570,10 @@ def _prep_footage(path: str) -> None:
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", hook],
             capture_output=True, timeout=60,
         )
+        rest_ss = hook_at + 2.00
         subprocess.run(
-            ["ffmpeg", "-y", "-i", path, "-c:v", "libx264", "-preset", "veryfast",
+            ["ffmpeg", "-y", "-ss", f"{rest_ss:.2f}", "-i", path,
+             "-c:v", "libx264", "-preset", "veryfast",
              "-crf", "18", "-c:a", "aac", rest],
             capture_output=True, timeout=90,
         )
@@ -697,6 +704,8 @@ def _hook_line(blob: str) -> str:
         return "Catch fish. Then FIGHT."
     if "steal" in low and "seed" in low:
         return "STEAL THE SEED"
+    if "anime" in low or "roll anime" in low:
+        return "ROLL. Unlock. Earn."
     return "WAIT. Watch this."
 
 
@@ -704,6 +713,8 @@ def _end_cta_line(blob: str) -> str:
     low = (blob or "").lower()
     if "steal" in low and "seed" in low:
         return "Steal a Seed on Roblox"
+    if "anime" in low or "roll anime" in low:
+        return "Roll Anime Girls on Roblox"
     if "fisch" in low:
         return "How to Fisch on Roblox"
     if re.search(r"\buse code\b|\bpromo code\b", low):
@@ -856,6 +867,10 @@ def _lock_plan_from_rules(rules: str, plan: dict | None) -> dict:
     if "steal" in low and "seed" in low:
         out["speak_text"] = out.get("speak_text") or "Steal A Seed"
         out["cta_text"] = out.get("cta_text") or "Game is called Steal A Seed on Roblox"
+    if "anime" in low or "roll anime" in low:
+        out["speak_text"] = out.get("speak_text") or "Roll Anime Girls"
+        out["cta_text"] = out.get("cta_text") or "Game is called Roll Anime Girls on Roblox"
+        out["end_title"] = out.get("end_title") or "ROLL ANIME GIRLS"
     if "athletics" in low:
         out["speak_text"] = out.get("speak_text") or "World Athletics"
         out["cta_text"] = out.get("cta_text") or "Game is called World Athletics on Roblox"
@@ -902,25 +917,31 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
     if "fisch" in blob:
         scripts = [
             "WAIT. This Roblox game slaps. Catch weird fish. Upgrade your gear. Then fight to survive. That is the whole loop. Keep catching. Keep upgrading. Game is called How to Fisch on Roblox.",
-            "YO. This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Watch the fight start. Game is called How to Fisch on Roblox.",
+            "This is not a normal fishing game. Catch a fish. Upgrade. Then fight. It looks simple and then it hits. Watch the fight start. Game is called How to Fisch on Roblox.",
             "LOOK. You keep catching fish to get stronger. Then you fight to stay alive. That loop is addictive. One more catch. Game is called How to Fisch on Roblox.",
         ]
     elif "tongue" in blob:
         scripts = [
             "WAIT. This Roblox game is actually insane. Your tongue grows. You swing across the map. You escape stage after stage. The stages keep getting harder. Do not fall now. Game is called Plus One Tongue Escape on Roblox.",
-            "YO. Watch this parkour. The tongue gets longer. The stages get harder. Keep swinging. Keep running. Do not fall. Game is called Plus One Tongue Escape on Roblox.",
+            "Watch this parkour. The tongue gets longer. The stages get harder. Keep swinging. Keep running. Do not fall. Game is called Plus One Tongue Escape on Roblox.",
             "LOOK. Grow the tongue. Swing. Escape. Next stage. Longer tongue. Harder jump. That is the whole game. Game is called Plus One Tongue Escape on Roblox.",
+        ]
+    elif "anime" in blob or "roll anime" in blob:
+        scripts = [
+            "This Roblox game is an RNG tycoon. You roll to unlock characters. You place them on your plot. They earn money even when you are offline. Upgrade luck. Rebirth. Climb faster. Game is called Roll Anime Girls on Roblox.",
+            "You roll. You unlock a character. You place them on your plot. They make money. Buy potions for better luck. Then rebirth for a permanent boost. Game is called Roll Anime Girls on Roblox.",
+            "Over two hundred characters to roll. Rare pulls change your whole base. Keep rolling. Keep building. Game is called Roll Anime Girls on Roblox.",
         ]
     elif "steal" in blob and "seed" in blob:
         scripts = [
             "WAIT. This Roblox game is actually wild. You sneak into their garden. You steal a seed. You plant it. You grow faster. Then you run before they catch you. People chase you. Do not get caught. That loop slaps. Game is called Steal a Seed on Roblox.",
-            "YO. Watch this. Grab the seed. Get out. Plant it on your side. Grow. Get faster. Then steal again. That is the whole game. Game is called Steal a Seed on Roblox.",
+            "Grab the seed. Get out. Plant it on your side. Grow. Get faster. Then steal again. That is the whole game. Game is called Steal a Seed on Roblox.",
             "LOOK. In this Roblox game you steal seeds to grow your garden and get faster. Sneak in. Take the seed. Escape. Grow. Repeat. Game is called Steal a Seed on Roblox.",
         ]
     else:
         scripts = [
             f"WAIT. This Roblox game is actually fun. Watch this. {cta}.",
-            f"YO. I found a new Roblox game you should try. {cta}.",
+            f"I found a new Roblox game you should try. {cta}.",
         ]
     used_n = 0
     try:
@@ -981,13 +1002,19 @@ def _apply_campaign_pack(campaign: Campaign, video_path: str) -> None:
         f"borderw=6:bordercolor=black:"
         f"x=(w-text_w)/2:y=h*0.18:enable='between(t,0,{hook_b:.2f})'"
     )
+    skip_words = {"yo", "yo.", "wait", "wait.", "look", "look.", "this"}
     for a, b, txt in groups:
         if b <= a or not txt:
             continue
+        if a < hook_b:
+            a = hook_b
         if a >= cta_a - 0.05:
             continue
         b = min(b, cta_a - 0.05)
         if b <= a:
+            continue
+        raw_txt = re.sub(r"[^a-zA-Z ]+", "", txt).strip().lower()
+        if raw_txt in skip_words:
             continue
         safe = re.sub(r"\s+", " ", txt.replace("\\", " ").replace("\n", " ").replace("'", ""))
         safe = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", safe).replace(":", " -")[:42]
@@ -1145,6 +1172,12 @@ def _ig_caption(campaign: Campaign, req: CampaignRequirements, meta: VideoMetada
     elif "modern warfare" in raw_l or "mw4" in raw_l:
         body = "MW4 multiplayer beta gameplay — drop in and play"
         extras = ["#COD", "#MW4", "#CallOfDuty"]
+    elif "anime" in raw_l or "roll anime" in raw_l:
+        body = (
+            "Roll. Place them on your plot. Earn even offline.\n"
+            "Game is called Roll Anime Girls on Roblox."
+        )
+        extras = ["#Roblox", "#RobloxRNG"]
     elif "steal" in raw_l and "seed" in raw_l:
         body = (
             "You sneak in. You steal a seed. You run.\n"
@@ -1214,6 +1247,7 @@ _SKIP_CAMPAIGN_MARKERS = (
     "forge gui",
 )
 _ALLOW_CAMPAIGN_MARKERS = (
+    "roll anime girls",
     "how to fisch",
     "steal a seed",
     "tongue escape",

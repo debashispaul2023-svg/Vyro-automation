@@ -633,8 +633,10 @@ def _open_named_board_campaign(page: Page, title: str) -> bool:
         needles += ["Athletics", "WORLD ATHLETICS"]
     if "fisch" in title.lower():
         needles += ["Fisch", "HOW TO FISCH"]
-    if "money" in title.lower() or "roll" in title.lower():
+    if "money roll" in title.lower() or "fortnite" in title.lower():
         needles += ["Money Roll", "+1 Money", "Get Rich", "Fortnite Map"]
+    if "anime" in title.lower() or "roll anime" in title.lower():
+        needles += ["Roll Anime Girls", "Anime Girls", "Roll Anime"]
     for root in [frame, page] + list(page.frames):
         for needle in needles:
             try:
@@ -674,9 +676,7 @@ def discover_and_join_new_campaigns(score_fn=None, max_new: int = 2) -> list[str
 
             frame = _open_campaigns_grid(page)
             named = (
-                "Money Roll",
-                "+1 Money Roll To Get Rich",
-                "Tongue Escape",
+                "Roll Anime Girls",
                 "Steal A Seed",
                 "World Athletics",
             )
@@ -865,8 +865,10 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
         cid = "how-to-fisch"
     elif "tongue" in name.lower():
         cid = "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a"
-    elif "money" in name.lower() or "roll" in name.lower():
+    elif "money roll" in name.lower() or "fortnite" in name.lower():
         cid = "money-roll"
+    elif "anime" in name.lower():
+        cid = "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c"
     rules = name
     if "fisch" in name.lower():
         rules = (
@@ -888,13 +890,24 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "Codes: WELCOME1, BONUS500, FREEBOOST.\n"
             "https://www.roblox.com/games/122245938604556/1-Tongue-Escape"
         )
-    elif "money" in name.lower() or "roll" in name.lower():
+    elif "money roll" in name.lower() or "fortnite" in name.lower():
         rules = (
             f"{name}\n"
             "The name +1 Money Roll To Get Rich must be spoken somewhere in the video.\n"
             "Show the Money Roll game icon or title card.\n"
             "A clear CTA must be included. Example: Game is called Money Roll To Get Rich on Fortnite.\n"
             "English-based. Follow the campaign brief exactly."
+        )
+    elif "anime" in name.lower() or "roll anime" in name.lower():
+        cid = "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c"
+        rules = (
+            f"{name}\n"
+            "The name Roll Anime Girls must be spoken somewhere in the video.\n"
+            "The Roll Anime Girls game icon must be visibly shown at the end of the video.\n"
+            "A clear CTA must be included. Example: Game is called Roll Anime Girls on Roblox.\n"
+            "Only Roblox accounts. English-based. 1% engagement minimum.\n"
+            "Show the roll loop: roll characters, place them on your plot, earn money, upgrade luck, rebirth.\n"
+            "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
         )
     elif "seed" in name.lower():
         cid = "steal-a-seed"
@@ -1002,9 +1015,14 @@ def check_configured_campaigns(skip_ids: set[str] | None = None) -> Optional[Who
                     print("[whop] Money Roll is Fortnite-account only — skip on this Roblox pipeline")
                     continue
                 if "fisch" in blob:
-                    print("[whop] How to Fisch saved as last resort — trying Steal A Seed first")
+                    print("[whop] How to Fisch saved as last resort — trying newer campaigns first")
                     fisch_last = campaign
                     continue
+                if "anime" in blob or "roll anime" in blob:
+                    print(f"[whop] selected Roll Anime Girls id={campaign.campaign_id}")
+                    if not has_assets:
+                        print("[whop] Roll Anime Girls needs Premade Footage Drive folder")
+                    return campaign
                 if "steal" in blob and "seed" in blob:
                     print(f"[whop] selected Steal A Seed doc={campaign.reference_doc_url or '(none)'}")
                     if not has_assets:

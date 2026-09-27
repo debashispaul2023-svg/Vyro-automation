@@ -5,11 +5,18 @@
     "money roll"
   ],
   "allow_name_markers": [
+    "roll anime girls",
     "steal a seed",
     "world athletics",
     "how to fisch"
   ],
   "joined_campaigns": [
+    {
+      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
+      "name_hint": "Roll Anime Girls",
+      "campaign_uuid": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
+      "game_link": "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
+    },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "Steal A Seed",
