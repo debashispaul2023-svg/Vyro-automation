@@ -1,1 +1,1 @@
-PLACEHOLDER_USE_LOCAL
+see artifacts/whop_client.py
