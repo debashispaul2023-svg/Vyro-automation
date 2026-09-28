@@ -1,4 +1,4 @@
-"""Vertical short renderer. 9:16 with blurred fill, no full-time watermark."""
+"""Vertical short renderer. 9:16 with blurred fill + animated Vyro corner logo."""
 
 from __future__ import annotations
 
@@ -8,6 +8,13 @@ import subprocess
 
 class RenderError(Exception):
     pass
+
+
+def _find_logo() -> str:
+    for name in ("logo.png", "logo.jpg", "vyro-logo-canva-2.png"):
+        if os.path.isfile(name):
+            return name
+    return ""
 
 
 def render_short(
@@ -20,31 +27,64 @@ def render_short(
     if not source_path or not os.path.isfile(source_path):
         raise RenderError(f"source missing: {source_path}")
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    has_audio = False
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", source_path,
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+        has_audio = "audio" in (probe.stdout or "").lower()
+    except Exception:
+        has_audio = False
+
+    logo = _find_logo()
     graph = (
         "[0:v]split[fg][bg];"
         "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,boxblur=18:8,eq=brightness=-0.05[bg];"
         "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,"
-        "unsharp=5:5:1.2:5:5:0.0,eq=contrast=1.07:saturation=1.10:brightness=0.01"
+        "unsharp=5:5:1.2:5:5:0.0,eq=contrast=1.07:saturation=1.10:brightness=0.01[base]"
     )
+    extra_in: list[str] = []
+    if logo:
+        extra_in = ["-i", logo]
+        graph += (
+            ";[1:v]format=rgba,scale=128:128:force_original_aspect_ratio=decrease,"
+            "fade=t=in:st=0.15:d=0.45:alpha=1[lg];"
+            "[base][lg]overlay=W-w-28:36[vout]"
+        )
+        print(f"[render] animated logo overlay from {logo}")
+    else:
+        graph += "[vout]"
+        print("[render] no logo.png in repo root — skip watermark")
+
+    audio_in = [] if has_audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    audio_src = "0:a?" if has_audio else f"{2 if logo else 1}:a"
+    audio_map = ["-map", "0:a?", "-shortest"] if has_audio else ["-map", audio_src, "-shortest"]
     ff = [
-        "ffmpeg", "-y", "-i", source_path,
+        "ffmpeg", "-y", "-i", source_path, *extra_in, *audio_in,
         "-filter_complex", graph,
+        "-map", "[vout]", *audio_map,
         "-r", "30",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         output_path,
     ]
     try:
         subprocess.run(ff, check=True, capture_output=True, timeout=240)
     except Exception:
         ff = [
-            "ffmpeg", "-y", "-i", source_path,
+            "ffmpeg", "-y", "-i", source_path, *audio_in,
             "-vf",
             "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
+            "-map", "0:v:0", *(["-map", "0:a:0"] if has_audio else ["-map", "1:a", "-shortest"]),
             "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-c:a", "aac", "-ar", "44100", "-ac", "2",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
             output_path,
         ]
         try:
