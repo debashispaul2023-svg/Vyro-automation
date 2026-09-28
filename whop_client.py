@@ -18,10 +18,27 @@ _mod.BLOX_CAMPAIGN_IDS = {
     "How to Fisch": "b59bb70c-58bf-44c1-9e44-0b54c59d90f4",
 }
 
+
+def check_configured_campaigns(skip_ids=None):
+    """daily_runner passes skip_ids; older impl may not accept it."""
+    fn = _mod.check_configured_campaigns
+    try:
+        campaign = fn(skip_ids=skip_ids)
+    except TypeError:
+        campaign = fn()
+    if campaign is None:
+        return None
+    skip = {str(x).lower() for x in (skip_ids or set()) if x}
+    ident = f"{campaign.campaign_id} {campaign.name}".lower()
+    if skip and any(s in ident for s in skip):
+        print(f"[whop] wrapper skip exhausted '{campaign.name}'")
+        return None
+    return campaign
+
+
 WhopCampaign = _mod.WhopCampaign
 WhopClientError = _mod.WhopClientError
 WhopSessionExpired = getattr(_mod, "WhopSessionExpired", _mod.WhopClientError)
-check_configured_campaigns = _mod.check_configured_campaigns
 discover_and_join_new_campaigns = _mod.discover_and_join_new_campaigns
 submit_video_link = _mod.submit_video_link
 BLOX_CAMPAIGN_IDS = _mod.BLOX_CAMPAIGN_IDS
