@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 _impl_path = Path(__file__).with_name("whop_client-1.py")
 _spec = importlib.util.spec_from_file_location("_whop_client_impl", _impl_path)
-_mod = importlib.util.module_from_spec(_spec)
 assert _spec is not None and _spec.loader is not None
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _mod
+sys.modules["_whop_client_impl"] = _mod
 _spec.loader.exec_module(_mod)
 
 _mod.BLOX_CAMPAIGN_IDS = {
