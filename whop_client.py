@@ -1,86 +1,37 @@
-"""
-whop_client.py
-
-Browser-automation client for Whop (whop.com) "Content Rewards" clipping
-campaigns.
-
-================================================================================
-HOW THIS DIFFERS FROM vyro_client.py
-================================================================================
-Whop has no single "my campaigns" dashboard page to scrape — every joined
-campaign lives at its own URL under the creator's Whop
-(whop.com/<creator>/<exp-id>/app/campaigns/<campaign-id>/), and there's no
-in-app list that shows them all in one place. So instead of scraping a
-"campaigns page", this module reads a small config file
-(whop_campaigns.json) listing the campaign URLs you've already joined, and
-checks each one directly. When you join a new campaign on Whop, add its URL
-to that file.
-
-Auth also works differently: you log in to Whop via Google (unscriptable),
-so this replays your full captured cookie jar (see module docstring below
-for how to capture it) instead of performing a login.
-
-================================================================================
-HOW AUTH WORKS
-================================================================================
-  1. Log in to https://whop.com normally in your phone browser via Google
-  2. Open DevTools -> Network tab, reload the page
-  3. Tap any request going to whop.com -> Headers tab -> find the
-     "Cookie:" line under Request Headers
-  4. Copy the ENTIRE value of that line
-  5. Set it as the GitHub secret WHOP_COOKIE_HEADER
-
-⚠️ Known risk: one of these cookies, `cf_clearance`, is Cloudflare's
-bot-check pass-token and may be tied to the IP/browser fingerprint that
-earned it — it may not transfer cleanly to a GitHub Actions runner. If
-check_configured_campaigns() fails with a Cloudflare challenge-page error
-(not a login redirect), that's this issue — it needs a different fix
-(residential proxy etc), not just a fresh cookie.
-================================================================================
-"""
+"""Load the working Whop client implementation and inject current BLOX campaign IDs."""
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import time
-from dataclasses import dataclass, field
-from typing import Optional
+import importlib.util
+from pathlib import Path
 
-from playwright.sync_api import (
-    Browser,
-    BrowserContext,
-    Page,
-    TimeoutError as PlaywrightTimeoutError,
-    sync_playwright,
-)
+_impl_path = Path(__file__).with_name("whop_client-1.py")
+_spec = importlib.util.spec_from_file_location("_whop_client_impl", _impl_path)
+_mod = importlib.util.module_from_spec(_spec)
+assert _spec is not None and _spec.loader is not None
+_spec.loader.exec_module(_mod)
 
-CAMPAIGNS_CONFIG_PATH = "whop_campaigns.json"
-WHOP_DISCOVER_URL = "https://whop.com/discover"
-BLOXCLIPS_HOME = "https://whop.com/bloxclips/"
-BLOXCLIPS_APP = "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/"
-WHOP_DISCOVER_URLS = (
-    BLOXCLIPS_APP,
-)
-DEFAULT_TIMEOUT_MS = 45000
-COOKIE_DOMAIN = ".whop.com"
+_mod.BLOX_CAMPAIGN_IDS = {
+    "Roll Anime Girls": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
+    "Steal A Seed": "ad06c6d9-d46f-4b03-9bf8-58bf8a09cf5b",
+    "Tongue Escape": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
+    "How to Fisch": "b59bb70c-58bf-44c1-9e44-0b54c59d90f4",
+}
 
+WhopCampaign = _mod.WhopCampaign
+WhopClientError = _mod.WhopClientError
+WhopSessionExpired = getattr(_mod, "WhopSessionExpired", _mod.WhopClientError)
+check_configured_campaigns = _mod.check_configured_campaigns
+discover_and_join_new_campaigns = _mod.discover_and_join_new_campaigns
+submit_video_link = _mod.submit_video_link
+BLOX_CAMPAIGN_IDS = _mod.BLOX_CAMPAIGN_IDS
 
-class WhopClientError(Exception):
-    """Raised on any Whop browser-automation failure."""
-
-
-class WhopSessionExpired(WhopClientError):
-    """Raised specifically when the saved cookie jar no longer works."""
-
-
-@dataclass
-class WhopCampaign:
-    campaign_id: str
-    name: str
-    requirements_text: str
-    source_clip_url: str
-    submit_page_url: str
-    reference_doc_url: Optional[str] = None
-    platforms: list[str] = field(default_factory=list)
+__all__ = [
+    "WhopCampaign",
+    "WhopClientError",
+    "WhopSessionExpired",
+    "check_configured_campaigns",
+    "discover_and_join_new_campaigns",
+    "submit_video_link",
+    "BLOX_CAMPAIGN_IDS",
+]
