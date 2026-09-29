@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 from google.auth.transport.requests import Request
@@ -16,6 +17,13 @@ DEFAULT_TOKEN_PATH = "token.json"
 GAMING_CATEGORY_ID = "20"
 SHARED_TAGS = ["contentcreator", "viral", "roblox", "shorts"]
 
+SEO_TITLES = {
+    "roll anime girls": "I rolled 200 anime girls in this Roblox RNG #shorts",
+    "steal a seed": "I stole every seed in this Roblox game #shorts",
+    "how to fisch": "This Roblox fishing FPS is actually insane #shorts",
+    "tongue escape": "Your tongue keeps GROWING in this Roblox game #shorts",
+}
+
 
 class UploadError(Exception):
     pass
@@ -26,6 +34,18 @@ class UploadResult:
     video_id: str
     video_url: str
     publish_at: str = ""
+
+
+def _seo_title(title: str) -> str:
+    raw = re.sub(r"\s+", " ", title or "").strip()
+    low = raw.lower().replace("#shorts", "").strip(" -|")
+    for key, better in SEO_TITLES.items():
+        if low == key or low.startswith(key):
+            print(f"[yt] SEO title rewrite: {raw!r} -> {better!r}")
+            return better
+    if raw and "#shorts" not in raw.lower():
+        raw = raw[:88].rstrip() + " #shorts"
+    return raw or "Roblox short #shorts"
 
 
 def _load_credentials(token_path: str = DEFAULT_TOKEN_PATH) -> Credentials:
@@ -88,12 +108,13 @@ def upload_video(
     if not os.path.isfile(video_path):
         raise UploadError(f"Video file not found: {video_path}")
 
+    title = _seo_title(title)
     creds = _load_credentials(token_path)
-    tag_list = _clean_tags(tags)
+    tag_list = _clean_tags(tags + ["Roblox", "RobloxRNG", "RollAnimeGirls"])
     desc = _with_hashtags(description, tag_list)
     print(
         f"[yt] category=Gaming({GAMING_CATEGORY_ID}) AI=yes "
-        f"privacy=public tags={tag_list}"
+        f"privacy=public title={title!r} tags={tag_list}"
     )
 
     try:
