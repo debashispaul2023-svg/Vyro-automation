@@ -22,6 +22,19 @@ _mod.BLOX_CAMPAIGN_IDS = {
 }
 
 
+def _skipped(campaign, skip_ids) -> bool:
+    skip = {str(x).strip().lower() for x in (skip_ids or set()) if str(x).strip()}
+    if not skip:
+        return False
+    cid = str(getattr(campaign, "campaign_id", "") or "").strip().lower()
+    name = str(getattr(campaign, "name", "") or "").strip().lower()
+    if cid and cid in skip:
+        return True
+    if name and name in skip:
+        return True
+    return False
+
+
 def check_configured_campaigns(skip_ids=None):
     """daily_runner passes skip_ids; older impl may not accept it."""
     fn = _mod.check_configured_campaigns
@@ -31,10 +44,8 @@ def check_configured_campaigns(skip_ids=None):
         campaign = fn()
     if campaign is None:
         return None
-    skip = {str(x).lower() for x in (skip_ids or set()) if x}
-    ident = f"{campaign.campaign_id} {campaign.name}".lower()
-    if skip and any(s in ident for s in skip):
-        print(f"[whop] wrapper skip exhausted '{campaign.name}'")
+    if _skipped(campaign, skip_ids):
+        print(f"[whop] wrapper skip exact-match '{campaign.name}' id={campaign.campaign_id}")
         return None
     return campaign
 
