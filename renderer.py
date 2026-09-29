@@ -1,4 +1,4 @@
-"""Vertical short renderer. 9:16 with blurred fill + animated Vyro corner logo."""
+"""Vertical short renderer. 9:16 blur-fit + pulsing Vyro corner logo."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ class RenderError(Exception):
 
 
 def _find_logo() -> str:
-    for name in ("logo.png", "logo.jpg", "vyro-logo-canva-2.png"):
+    for name in ("logo.png", "logo.jpg", "logo-hud.jpg", "vyro-logo-canva-2.png"):
         if os.path.isfile(name):
             return name
     return ""
@@ -45,20 +45,21 @@ def render_short(
     graph = (
         "[0:v]split[fg][bg];"
         "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,boxblur=18:8,eq=brightness=-0.05[bg];"
+        "crop=1080:1920,boxblur=20:8,eq=brightness=-0.06[bg];"
         "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,"
-        "unsharp=5:5:1.2:5:5:0.0,eq=contrast=1.07:saturation=1.10:brightness=0.01[base]"
+        "unsharp=5:5:1.35:5:5:0.0,eq=contrast=1.09:saturation=1.12:brightness=0.015[base]"
     )
     extra_in: list[str] = []
     if logo:
         extra_in = ["-i", logo]
         graph += (
-            ";[1:v]format=rgba,scale=128:128:force_original_aspect_ratio=decrease,"
-            "fade=t=in:st=0.15:d=0.45:alpha=1[lg];"
-            "[base][lg]overlay=W-w-28:36[vout]"
+            ";[1:v]format=rgba,scale=176:176:force_original_aspect_ratio=decrease,"
+            "zoompan=z='1.04+0.04*sin(2*PI*on/45)':d=1:s=176x176:fps=30,"
+            "fade=t=in:st=0.12:d=0.35:alpha=1[lg];"
+            "[base][lg]overlay=W-w-22:28[vout]"
         )
-        print(f"[render] animated logo overlay from {logo}")
+        print(f"[render] pulsing logo overlay from {logo}")
     else:
         graph += "[vout]"
         print("[render] no logo.png in repo root — skip watermark")
@@ -81,7 +82,8 @@ def render_short(
         ff = [
             "ffmpeg", "-y", "-i", source_path, *audio_in,
             "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
+            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
+            "unsharp=5:5:1.2:5:5:0.0",
             "-map", "0:v:0", *(["-map", "0:a:0"] if has_audio else ["-map", "1:a", "-shortest"]),
             "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
