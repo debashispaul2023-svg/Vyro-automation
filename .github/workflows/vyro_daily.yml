@@ -121,7 +121,11 @@ jobs:
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          git add processed_clips.json processed_campaigns.json youtube_schedule.json
+          for f in processed_clips.json processed_campaigns.json youtube_schedule.json; do
+            if [ -f "$f" ]; then
+              git add "$f"
+            fi
+          done
           git status
           if git diff --staged --quiet; then
             echo "No clip-log changes to commit"
