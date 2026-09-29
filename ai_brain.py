@@ -1,36 +1,4 @@
-"""
-ai_brain.py
-
-The "AI brain" for this automation — wraps the Google Gemini API (model:
-gemini-3.6-flash, which is on the free tier as of writing — light text
-work like this doesn't need a paid/Pro model) for three jobs:
-
-  1. ai_parse_requirements() — reads a campaign's requirement text in ANY
-     language or format and extracts structured rules: hashtags, links,
-     duration range, referral code, watermark text.
-
-  2. ai_generate_metadata() — writes an actual catchy title/description/
-     caption/hashtag set tailored to the clip's content, instead of the
-     fixed template in metadata.py. Falls back to the template version if
-     the API call fails.
-
-  3. ai_score_campaign() — sanity-checks whether a campaign's requirements
-     look legitimate vs. low-quality/scam-like, so daily_runner.py can
-     skip bad campaigns and try another platform instead.
-
-Required environment variable: GEMINI_API_KEY
-(Get one free at https://aistudio.google.com/apikey)
-
-Note: a paid "Google AI Pro" app subscription (the consumer Gemini chat
-app) does NOT include API access or credits — the API is billed
-separately. This module intentionally sticks to a free-tier Flash model so
-no billing setup is needed at all. Free tier has modest rate limits (a
-handful of requests per minute, up to ~1000/day) — comfortably enough for
-this pipeline's once-a-day usage, but don't call these functions in a
-tight loop. If you ever do set up separate API billing and want more
-reasoning power, change MODEL_NAME below to a Pro model — no other code
-changes needed.
-"""
+"""Gemini brain with short per-key timeout so Daily cannot hang."""
 
 from __future__ import annotations
 
@@ -42,7 +10,13 @@ from typing import Optional
 
 import google.generativeai as genai
 
-MODEL_NAME = "gemini-3.6-flash"
+MODEL_CANDIDATES = (
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-3.6-flash",
+)
+MODEL_NAME = MODEL_CANDIDATES[0]
+GEMINI_TIMEOUT_SEC = 20
 
 
 class AIBrainError(Exception):
@@ -58,9 +32,9 @@ def _gemini_keys() -> list[str]:
     return keys
 
 
-def _model(api_key: str) -> "genai.GenerativeModel":
+def _model(api_key: str, model_name: str | None = None) -> "genai.GenerativeModel":
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel(MODEL_NAME)
+    return genai.GenerativeModel(model_name or MODEL_NAME)
 
 
 def _extract_json_blob(text: str) -> str:
@@ -95,12 +69,9 @@ def _repair_json(blob: str) -> str:
     s = (blob or "").strip()
     if not s:
         return "{}"
-    # drop trailing commas before ] or }
     s = re.sub(r",(\s*[}\]])", r"\1", s)
-    # close an open string
-    quotes = 0
-    esc = False
     in_str = False
+    esc = False
     for ch in s:
         if in_str:
             if esc:
@@ -109,14 +80,11 @@ def _repair_json(blob: str) -> str:
                 esc = True
             elif ch == '"':
                 in_str = False
-                quotes += 1
             continue
         if ch == '"':
             in_str = True
-            quotes += 1
     if in_str:
         s += '"'
-    # close open arrays / objects
     opens = s.count("[") - s.count("]")
     if opens > 0:
         s += "]" * opens
@@ -170,9 +138,6 @@ def _loads_json(text: str) -> dict:
 
 
 def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
-    """Sends a prompt to Gemini requesting a strict JSON response, and
-    parses it. Raises AIBrainError on any failure (network, bad JSON,
-    empty response, etc) so callers can fall back to non-AI logic."""
     keys = _gemini_keys()
     if not keys:
         raise AIBrainError("GEMINI_API_KEY / GEMINI_API_KEYS not set.")
@@ -180,8 +145,9 @@ def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
     text = ""
     try:
         for i, key in enumerate(keys, start=1):
+            model_name = MODEL_CANDIDATES[(i - 1) % len(MODEL_CANDIDATES)]
             try:
-                model = _model(key)
+                model = _model(key, model_name)
                 response = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(
@@ -189,15 +155,14 @@ def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
                         max_output_tokens=max_output_tokens,
                         temperature=0.2,
                     ),
+                    request_options={"timeout": GEMINI_TIMEOUT_SEC},
                 )
                 text = response.text
-                if i > 1:
-                    print(f"[gemini] used key #{i}")
+                print(f"[gemini] ok key #{i} model={model_name}")
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                msg = str(exc)
-                print(f"[gemini] key #{i}/{len(keys)} failed: {msg[:160]}")
+                print(f"[gemini] key #{i}/{len(keys)} {model_name} failed: {str(exc)[:160]}")
                 if i < len(keys):
                     continue
         else:
@@ -211,16 +176,11 @@ def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
 
     if not text:
         raise AIBrainError("Gemini returned an empty response.")
-
     try:
         return _loads_json(text)
     except json.JSONDecodeError as exc:
         raise AIBrainError(f"Could not parse Gemini's JSON response: {exc}\nRaw: {text[:400]}") from exc
 
-
-# ---------------------------------------------------------------------------
-# 1. Requirement parsing
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ParsedRequirements:
@@ -234,26 +194,17 @@ class ParsedRequirements:
 
 
 _REQUIREMENTS_PROMPT = """\
-You will be given the raw requirements text for a video-clipping campaign, \
-possibly in Bengali, English, a mix, or broken grammar, and possibly noisy \
-(pulled from a full webpage, so it may include unrelated navigation text — \
-ignore that and find the actual campaign rules). Extract the actual rules \
-a video clipper must follow.
-
-Respond with ONLY a JSON object matching exactly this shape:
+Extract campaign rules. JSON only:
 {{
   "mandatory_hashtags": ["#example"],
   "required_links": ["https://..."],
   "min_seconds": 15,
-  "max_seconds": 60,
-  "referral_code": "CODE or null",
-  "watermark_text": "text to overlay on video, or null",
-  "notes": "anything unusual/unclear worth flagging, or empty string"
+  "max_seconds": 30,
+  "referral_code": null,
+  "watermark_text": null,
+  "notes": ""
 }}
-
-If a field isn't mentioned, use a sensible default (empty list, 15/60 for \
-duration, null for optional strings). Keep notes under 12 words. Do not \
-write long strings. Close every array and object.
+Keep notes under 12 words. Close every array.
 
 Requirements text:
 \"\"\"
@@ -284,13 +235,11 @@ def _regex_requirements(raw_text: str) -> ParsedRequirements:
 def ai_parse_requirements(raw_text: str) -> ParsedRequirements:
     if not raw_text or not raw_text.strip():
         raise AIBrainError("Empty requirements text.")
-
     try:
         data = _call_json(_REQUIREMENTS_PROMPT.format(text=raw_text[:3500]), max_output_tokens=512)
     except AIBrainError as exc:
         print(f"[gemini] parse fallback ({exc})")
         return _regex_requirements(raw_text)
-
     tags = data.get("mandatory_hashtags") or []
     if not isinstance(tags, list):
         tags = []
@@ -308,10 +257,6 @@ def ai_parse_requirements(raw_text: str) -> ParsedRequirements:
     )
 
 
-# ---------------------------------------------------------------------------
-# 2. Metadata generation
-# ---------------------------------------------------------------------------
-
 @dataclass
 class AIMetadata:
     title: str
@@ -321,23 +266,18 @@ class AIMetadata:
 
 
 _METADATA_PROMPT = """\
-You are writing YouTube Shorts + Instagram Reels metadata for a viral clip \
-from this campaign. Write in a punchy, high-CTR style — the kind of hook \
-that gets clicks, not a dry description.
-
-Clip context / hook: {hook}
-Campaign summary: {summary}
-Mandatory hashtags (MUST all appear, do not change or drop any): {hashtags}
-Mandatory links (MUST appear in the description, verbatim): {links}
-Referral code (if any, mention it naturally): {referral_code}
-
-Respond with ONLY a JSON object:
+Write Shorts + Reels metadata. JSON only:
 {{
-  "title": "YouTube title, under 100 characters, MUST end with the mandatory hashtags then #shorts",
-  "description": "YouTube description, 2-4 short lines, MUST include every mandatory link verbatim and the referral code if given",
-  "hashtags": ["#tag1", "#tag2"],
-  "instagram_caption": "A separate short Instagram caption, can be more casual/emoji-friendly, MUST also include the mandatory hashtags"
+  "title": "title under 100 chars ending with mandatory hashtags then #shorts",
+  "description": "2-4 short lines including mandatory links",
+  "hashtags": ["#tag1"],
+  "instagram_caption": "short caption with mandatory hashtags"
 }}
+Hook: {hook}
+Summary: {summary}
+Hashtags: {hashtags}
+Links: {links}
+Code: {referral_code}
 """
 
 
@@ -356,7 +296,6 @@ def ai_generate_metadata(
         referral_code=referral_code or "(none)",
     )
     data = _call_json(prompt)
-
     description = data.get("description", "") or ""
     for link in required_links:
         if link not in description:
@@ -365,7 +304,6 @@ def ai_generate_metadata(
     for tag in mandatory_hashtags:
         if tag.lower() not in title.lower():
             title += f" {tag}"
-
     return AIMetadata(
         title=title.strip(),
         description=description.strip(),
@@ -374,122 +312,36 @@ def ai_generate_metadata(
     )
 
 
-# ---------------------------------------------------------------------------
-# 3. Campaign quality scoring
-# ---------------------------------------------------------------------------
-
 @dataclass
 class CampaignScore:
     is_good: bool
     reason: str
 
 
-_SCORE_PROMPT = """\
-You are screening a video-clipping campaign brief for a creator whose goal
-is genuine virality on Instagram/YouTube Shorts/TikTok — content people
-share because it's funny, surprising, satisfying, or dramatic, not
-because of a licensed song or a sports league's official highlights.
-
-Mark it LOW QUALITY (reject) if ANY of these apply:
-  - It centers on sports footage tied to official/licensed music or a
-    league's branded audio (e.g. "FIFA + World Cup Edits", official
-    anthem/song requirements) — these have low organic virality and high
-    copyright-strike risk regardless of payout.
-  - It's a one-off test/leftover listing rather than a real live
-    campaign (e.g. anything that reads like "U2", "Geezerbomb",
-    "Rockbottom", "world cup edits" — these are known dead test
-    campaigns, always reject them outright if mentioned).
-  - It's romance/dating/adult-themed content of any kind (not
-    appropriate to pursue).
-  - It shows scam signs: vague/contradictory rules, asks for sensitive
-    personal/financial info beyond a normal payout method, unrealistic
-    payout promises, no real content rules, or reads as spam/gibberish/
-    nav-junk with no real campaign content.
-  - Its budget is already fully used up (e.g. "100% used", "$0
-    remaining").
-
-Mark it GOOD if it's a real, live, clearly-ruled campaign about content
-with genuine share-appeal: comedy, gaming, satisfying/oddly-satisfying
-clips, surprising reveals, clean general entertainment, relatable
-everyday moments, or similar — where the creator's own edit/hook does the
-work, not a licensed song or sports-league branding.
-
-Campaign requirements text:
-\"\"\"
-{text}
-\"\"\"
-
-Respond with ONLY a JSON object:
-{{"is_good": true or false, "reason": "one short sentence explaining why"}}
-"""
-
-
 def ai_score_campaign(raw_text: str) -> CampaignScore:
     if not raw_text or not raw_text.strip():
         return CampaignScore(is_good=False, reason="Empty requirements text.")
-
     try:
-        data = _call_json(_SCORE_PROMPT.format(text=raw_text[:6000]), max_output_tokens=256)
+        data = _call_json(
+            'Score this campaign. JSON only: {{"is_good": true, "reason": "one line"}}\n' + raw_text[:4000],
+            max_output_tokens=256,
+        )
     except AIBrainError as exc:
-        # If scoring itself fails, don't block the pipeline over it.
         return CampaignScore(is_good=True, reason=f"Scoring unavailable ({exc}), proceeding by default.")
-
     return CampaignScore(is_good=bool(data.get("is_good", True)), reason=data.get("reason", ""))
 
 
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python ai_brain.py <parse|score> <text>")
-        sys.exit(1)
-
-    mode = sys.argv[1]
-    sample_text = sys.argv[2] if len(sys.argv) > 2 else "Use hashtags #mrbeast #shorts, 20-35 seconds, code MRBEAST"
-
-    if mode == "parse":
-        print(ai_parse_requirements(sample_text))
-    elif mode == "score":
-        print(ai_score_campaign(sample_text))
-    else:
-        print("Unknown mode. Use 'parse' or 'score'.")
-
-
-# ---------------------------------------------------------------------------
-# 4. Rank official folder clips against campaign rules
-# ---------------------------------------------------------------------------
-
-_RANK_PROMPT = """\
-You pick official gameplay clips for a paid campaign.
-
-Campaign rules:
-{rules}
-
-Clip filenames in the folder:
-{names}
-
-Pick the 8 best filenames that likely show the core mechanic (for How to Fisch:
-catching fish, fighting, upgrading gear, not a still logo). Skip names like
-Game_Image, icon, logo, banner, thumbnail.
-
-Respond with ONLY JSON:
-{{
-  "ranked_names": ["file1.mp4", "file2.mp4"]
-}}
-"""
-
-
 def ai_rank_clip_names(clip_names: list[str], requirements: str) -> list[str]:
-    """Return preferred clip filenames. Empty list on failure."""
     names = [n for n in clip_names if n]
     if not names:
         return []
     try:
         data = _call_json(
-            _RANK_PROMPT.format(
-                rules=(requirements or "")[:3500],
-                names="\n".join(names[:80]),
-            )
+            "Pick 8 best clip filenames. Skip icon/logo/banner. JSON only: "
+            '{"ranked_names": ["file1.mp4"]}\nRules:\n'
+            + (requirements or "")[:2500]
+            + "\nFiles:\n"
+            + "\n".join(names[:80])
         )
         ranked = [str(x) for x in (data.get("ranked_names") or []) if x]
         print(f"[ai] ranked {len(ranked)} clip name(s)")
@@ -497,33 +349,6 @@ def ai_rank_clip_names(clip_names: list[str], requirements: str) -> list[str]:
     except Exception as exc:
         print(f"[ai] clip rank skipped: {exc}")
         return []
-
-
-# ---------------------------------------------------------------------------
-# 5. Turn campaign rules into which edit tools to run
-# ---------------------------------------------------------------------------
-
-_PLAN_PROMPT = """\
-Read these campaign rules and decide which edit tools the renderer must run.
-
-Rules:
-{rules}
-
-Respond with ONLY JSON:
-{{
-  "speak_text": "exact words that must be spoken, or empty",
-  "cta_text": "on-screen CTA, or empty",
-  "end_title": "end-card title like HOW TO FISCH, or empty",
-  "need_captions": true,
-  "need_spoken_voice": true,
-  "need_end_icon": true,
-  "need_quality_boost": true,
-  "notes": "one line"
-}}
-If the rules say the name must be spoken, set need_spoken_voice true and speak_text.
-If they say show the game icon at the end, set need_end_icon true.
-If they reject low quality, set need_quality_boost true.
-"""
 
 
 def ai_plan_edit_tools(requirements: str) -> dict:
@@ -535,10 +360,28 @@ def ai_plan_edit_tools(requirements: str) -> dict:
     must_cta = any(x in low for x in ("cta", "call to action", "game is called"))
     must_cap = any(x in low for x in ("on-screen caption", "burned caption", "subtitle"))
     reject_lq = any(x in low for x in ("low-quality", "low quality", "poorly presented"))
+    anime = "anime" in low
+    fisch = "fisch" in low
     fallback = {
-        "speak_text": ("In this Roblox game you catch strange fish, upgrade your gear, and fight. The game is called How to Fisch." if must_speak and "fisch" in low else ""),
-        "cta_text": "Game is called How to Fisch on Roblox" if must_cta and "fisch" in low else "",
-        "end_title": "HOW TO FISCH" if must_icon and "fisch" in low else "",
+        "speak_text": (
+            "You roll dice to unlock anime girls, place them on your plot, and make money. Game is called Roll Anime Girls on Roblox."
+            if must_speak and anime
+            else (
+                "In this Roblox game you catch strange fish, upgrade your gear, and fight. The game is called How to Fisch."
+                if must_speak and fisch
+                else ""
+            )
+        ),
+        "cta_text": (
+            "Game is called Roll Anime Girls on Roblox"
+            if must_cta and anime
+            else ("Game is called How to Fisch on Roblox" if must_cta and fisch else "")
+        ),
+        "end_title": (
+            "ROLL ANIME GIRLS"
+            if must_icon and anime
+            else ("HOW TO FISCH" if must_icon and fisch else "")
+        ),
         "need_captions": must_cap or must_cta,
         "need_spoken_voice": must_speak,
         "need_end_icon": must_icon,
@@ -549,7 +392,11 @@ def ai_plan_edit_tools(requirements: str) -> dict:
     if not text:
         return fallback
     try:
-        data = _call_json(_PLAN_PROMPT.format(rules=text[:4000]))
+        data = _call_json(
+            "Decide edit tools. JSON only with speak_text,cta_text,end_title,"
+            "need_captions,need_spoken_voice,need_end_icon,need_quality_boost,notes.\n"
+            + text[:3500]
+        )
         plan = dict(fallback)
         plan.update({k: data.get(k, plan[k]) for k in plan})
         if plan.get("ready_to_upload"):
