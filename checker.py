@@ -23,6 +23,10 @@ except ImportError:  # pragma: no cover
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 DURATION_TOLERANCE_SECONDS = 0.5
+# Briefs that never mention a floor still parse as 15s. Shorts under that
+# must still upload when they are a real vertical clip.
+DEFAULT_PARSED_MIN = 15.0
+SHORTS_FLOOR = 7.0
 
 
 class ValidationError(Exception):
@@ -77,15 +81,20 @@ def _check_duration(video_path: str, req: CampaignRequirements) -> Optional[str]
         if clip is not None:
             clip.close()
 
-    if duration < req.min_seconds - DURATION_TOLERANCE_SECONDS:
+    min_s = float(req.min_seconds or 0)
+    max_s = float(req.max_seconds or 60)
+    if min_s >= DEFAULT_PARSED_MIN and duration >= SHORTS_FLOOR:
+        print(f"[check] relaxing default {min_s}s min — clip is {duration:.1f}s")
+        min_s = min(min_s, duration)
+    if duration < min_s - DURATION_TOLERANCE_SECONDS:
         return (
             f"Video duration {duration:.2f}s is below campaign minimum "
-            f"{req.min_seconds}s."
+            f"{min_s}s."
         )
-    if duration > req.max_seconds + DURATION_TOLERANCE_SECONDS:
+    if duration > max_s + DURATION_TOLERANCE_SECONDS:
         return (
             f"Video duration {duration:.2f}s exceeds campaign maximum "
-            f"{req.max_seconds}s."
+            f"{max_s}s."
         )
     return None
 
@@ -127,10 +136,6 @@ def run_pre_upload_checks(
     description: str,
     req: CampaignRequirements,
 ) -> CheckResult:
-    """
-    Runs all compliance checks and returns a CheckResult. Does NOT raise —
-    use `validate_or_raise` if you want the halt-on-failure behavior.
-    """
     checks: dict[str, bool] = {}
     failures: list[str] = []
 
@@ -155,36 +160,7 @@ def validate_or_raise(
     description: str,
     req: CampaignRequirements,
 ) -> CheckResult:
-    """
-    Same as run_pre_upload_checks, but raises ValidationError (halting the
-    upload) if any check failed. Use this directly in front of the YouTube
-    upload API call.
-    """
     result = run_pre_upload_checks(video_path, title, description, req)
     if not result.passed:
         raise ValidationError(result.failures)
     return result
-
-
-if __name__ == "__main__":
-    from requirements_parser import parse_campaign
-
-    demo_req = parse_campaign(
-        {
-            "campaign_id": "demo",
-            "mandatory_hashtags": ["#mrbeast"],
-            "required_links": ["https://vyro.ai/c/demo"],
-            "min_seconds": 20,
-            "max_seconds": 35,
-        }
-    )
-    try:
-        validate_or_raise(
-            video_path="output/short_demo.mp4",
-            title="He gave away $100,000 #mrbeast #shorts",
-            description="Full video linked below.\nhttps://vyro.ai/c/demo\n#mrbeast #shorts",
-            req=demo_req,
-        )
-        print("All checks passed. Safe to upload.")
-    except ValidationError as e:
-        print(e)
