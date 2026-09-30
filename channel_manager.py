@@ -1,28 +1,26 @@
 """
 AI Channel Manager for Vyro-automation (dry-run by default).
 
-Separate from Daily video generation. Once a day it:
+The Daily upload token only has youtube.upload, so channels.list(mine=True)
+returns 403. This manager therefore:
 
-  1. Lists recent uploads on the connected YouTube channel
-  2. Optionally reads Analytics if the token has yt-analytics.readonly
-  3. Asks Gemini whether any title/description should be rewritten
-  4. Logs proposals to channel_manager_actions.json
+  1. Tries OAuth mine=True (works after a wider-scope re-auth)
+  2. Falls back to public videos.list via API key + published_log.json
+  3. Optional: YOUTUBE_CHANNEL_HANDLE or YOUTUBE_CHANNEL_ID + API key
 
 Nothing is edited on YouTube unless CHANNEL_MANAGER_APPLY_CHANGES=true.
-
-Uses the same token.json Daily already restores from YOUTUBE_TOKEN_JSON.
-Current upload token may only have youtube.upload — list + stats usually
-work; live title edits need a wider YouTube scope. Dry-run still works.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import traceback
 from datetime import datetime, timezone
 
-from youtube_uploader import UploadError, _load_credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from youtube_uploader import PUBLISHED_LOG, UploadError, _load_credentials
 
 ACTIONS_LOG = "channel_manager_actions.json"
 MAX_ACTIONS = 3
@@ -49,54 +47,32 @@ def _append_log(entry: dict) -> None:
         json.dump(rows[-300:], f, indent=2)
 
 
-def _youtube():
-    from googleapiclient.discovery import build
+def _api_key() -> str:
+    return (os.getenv("YOUTUBE_API_KEY") or os.getenv("GOOGLE_DRIVE_API_KEY") or "").strip()
 
+
+def _oauth_client():
     creds = _load_credentials("token.json")
     return build("youtube", "v3", credentials=creds), creds
 
 
-def _analytics(creds):
-    try:
-        from googleapiclient.discovery import build
-
-        return build("youtubeAnalytics", "v2", credentials=creds)
-    except Exception:
+def _key_client():
+    key = _api_key()
+    if not key:
         return None
+    return build("youtube", "v3", developerKey=key)
 
 
-def _list_recent_videos(youtube, limit: int = 20) -> list[dict]:
-    ch = youtube.channels().list(part="contentDetails,statistics", mine=True).execute()
-    items = ch.get("items") or []
-    if not items:
-        print("[cm] no channel found for this token")
-        return []
-    uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-    print(
-        f"[cm] channel videos={items[0].get('statistics', {}).get('videoCount')} "
-        f"views={items[0].get('statistics', {}).get('viewCount')}"
-    )
-    pl = youtube.playlistItems().list(
-        part="contentDetails,snippet",
-        playlistId=uploads,
-        maxResults=min(limit, 50),
-    ).execute()
-    ids = [it["contentDetails"]["videoId"] for it in pl.get("items") or []]
-    if not ids:
-        return []
-    det = youtube.videos().list(
-        part="snippet,status,statistics,contentDetails",
-        id=",".join(ids),
-    ).execute()
+def _hydrate(items: list) -> list[dict]:
     out = []
-    for it in det.get("items") or []:
+    for it in items or []:
         sn, st, stats = it.get("snippet") or {}, it.get("status") or {}, it.get("statistics") or {}
         out.append(
             {
-                "video_id": it["id"],
+                "video_id": it.get("id") or "",
                 "title": sn.get("title") or "",
                 "description": (sn.get("description") or "")[:280],
-                "privacy": st.get("privacyStatus"),
+                "privacy": st.get("privacyStatus") or "public",
                 "published_at": sn.get("publishedAt"),
                 "views": int(stats.get("viewCount") or 0),
                 "likes": int(stats.get("likeCount") or 0),
@@ -104,7 +80,142 @@ def _list_recent_videos(youtube, limit: int = 20) -> list[dict]:
                 "duration": (it.get("contentDetails") or {}).get("duration"),
             }
         )
+    return [r for r in out if r.get("video_id")]
+
+
+def _videos_by_ids(client, ids: list[str]) -> list[dict]:
+    clean = []
+    seen = set()
+    for raw in ids:
+        vid = (raw or "").strip()
+        if vid and vid not in seen:
+            seen.add(vid)
+            clean.append(vid)
+    out = []
+    for i in range(0, len(clean), 50):
+        chunk = clean[i : i + 50]
+        det = client.videos().list(
+            part="snippet,status,statistics,contentDetails",
+            id=",".join(chunk),
+        ).execute()
+        out.extend(_hydrate(det.get("items") or []))
     return out
+
+
+def _ids_from_published_log() -> list[str]:
+    if not os.path.isfile(PUBLISHED_LOG):
+        return []
+    try:
+        rows = json.loads(open(PUBLISHED_LOG, encoding="utf-8").read())
+    except Exception:
+        return []
+    if not isinstance(rows, list):
+        return []
+    ids = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("video_id"):
+            ids.append(str(row["video_id"]))
+    return ids
+
+
+def _list_via_oauth(youtube) -> list[dict]:
+    ch = youtube.channels().list(part="contentDetails,statistics", mine=True).execute()
+    items = ch.get("items") or []
+    if not items:
+        return []
+    print(
+        f"[cm] oauth channel videos={items[0].get('statistics', {}).get('videoCount')} "
+        f"views={items[0].get('statistics', {}).get('viewCount')}"
+    )
+    uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    pl = youtube.playlistItems().list(
+        part="contentDetails",
+        playlistId=uploads,
+        maxResults=20,
+    ).execute()
+    ids = [it["contentDetails"]["videoId"] for it in pl.get("items") or []]
+    return _videos_by_ids(youtube, ids)
+
+
+def _list_via_handle(client) -> list[dict]:
+    handle = (os.getenv("YOUTUBE_CHANNEL_HANDLE") or "").strip().lstrip("@")
+    cid = (os.getenv("YOUTUBE_CHANNEL_ID") or "").strip()
+    items = []
+    if cid.startswith("UC"):
+        resp = client.channels().list(part="contentDetails,statistics", id=cid).execute()
+        items = resp.get("items") or []
+    elif handle:
+        resp = client.channels().list(part="contentDetails,statistics", forHandle=handle).execute()
+        items = resp.get("items") or []
+    if not items:
+        return []
+    print(
+        f"[cm] public channel videos={items[0].get('statistics', {}).get('videoCount')} "
+        f"views={items[0].get('statistics', {}).get('viewCount')}"
+    )
+    uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    pl = client.playlistItems().list(
+        part="contentDetails",
+        playlistId=uploads,
+        maxResults=20,
+    ).execute()
+    ids = [it["contentDetails"]["videoId"] for it in pl.get("items") or []]
+    return _videos_by_ids(client, ids)
+
+
+def _collect_snapshot() -> tuple[list[dict], object | None]:
+    youtube = None
+    creds = None
+    if os.path.isfile("token.json"):
+        try:
+            youtube, creds = _oauth_client()
+            snap = _list_via_oauth(youtube)
+            if snap:
+                print(f"[cm] listed {len(snap)} video(s) via OAuth")
+                return snap, youtube
+        except HttpError as exc:
+            if getattr(exc, "resp", None) is not None and exc.resp.status == 403:
+                print("[cm] OAuth token is youtube.upload only — skipping mine=True list")
+            else:
+                print(f"[cm] OAuth list skipped: {exc}")
+        except UploadError as exc:
+            print(f"[cm] OAuth skipped: {exc}")
+        except Exception as exc:
+            print(f"[cm] OAuth skipped: {exc}")
+
+    key_yt = _key_client()
+    if key_yt is None:
+        print("[cm] no YOUTUBE_API_KEY / GOOGLE_DRIVE_API_KEY for public list")
+    else:
+        try:
+            snap = _list_via_handle(key_yt)
+            if snap:
+                print(f"[cm] listed {len(snap)} video(s) via channel handle/id")
+                return snap, youtube or key_yt
+        except Exception as exc:
+            print(f"[cm] handle list skipped: {exc}")
+        ids = _ids_from_published_log()
+        if ids:
+            try:
+                snap = _videos_by_ids(key_yt, ids)
+                if snap:
+                    print(f"[cm] listed {len(snap)} video(s) via published_log.json + API key")
+                    return snap, youtube or key_yt
+            except Exception as exc:
+                print(f"[cm] published_log list failed: {exc}")
+
+    ids = _ids_from_published_log()
+    if youtube and ids:
+        try:
+            snap = _videos_by_ids(youtube, ids)
+            if snap:
+                print(f"[cm] listed {len(snap)} video(s) via published_log.json + OAuth")
+                return snap, youtube
+        except Exception as exc:
+            print(f"[cm] oauth-by-id skipped: {exc}")
+
+    print("[cm] no video snapshot available")
+    return [], youtube
 
 
 def _gemini_actions(snapshot: list[dict]) -> list[dict]:
@@ -158,6 +269,9 @@ def _apply_rewrite(youtube, action: dict) -> bool:
     if not APPLY_CHANGES:
         print(f"[cm] dry-run rewrite {vid} -> {title!r}")
         return True
+    if youtube is None:
+        print("[cm] no OAuth client — cannot apply rewrite")
+        return False
     try:
         cur = youtube.videos().list(part="snippet", id=vid).execute()
         items = cur.get("items") or []
@@ -182,50 +296,27 @@ def run_channel_manager() -> int:
     print("=" * 60)
     print(f"AI CHANNEL MANAGER — {mode}")
     print("=" * 60)
-    if not os.path.isfile("token.json"):
-        print("[cm] token.json missing — skip (Daily still works without this job)")
-        return 0
-    try:
-        youtube, creds = _youtube()
-    except UploadError as exc:
-        print(f"[cm] auth failed: {exc}")
-        return 0
-    except Exception as exc:
-        print(f"[cm] auth failed: {exc}")
-        traceback.print_exc()
-        return 0
 
-    try:
-        snapshot = _list_recent_videos(youtube)
-    except Exception as exc:
-        print(f"[cm] list videos failed: {exc}")
-        traceback.print_exc()
-        return 0
-
+    snapshot, youtube = _collect_snapshot()
     if not snapshot:
-        print("[cm] no videos to review")
+        print("[cm] nothing to review this run")
+        _append_log({"type": "noop", "reason": "no snapshot"})
+        print("=" * 60)
         return 0
 
     for row in snapshot[:8]:
-        print(
-            f"[cm] {row['privacy']:8} {row['views']:5}v  {row['title'][:70]}"
-        )
+        print(f"[cm] {row['privacy']:8} {row['views']:5}v  {row['title'][:70]}")
 
     titles = [r["title"] for r in snapshot]
     dupes = {t for t in titles if titles.count(t) > 1}
     if dupes:
         print(f"[cm] duplicate titles: {len(dupes)}")
 
-    analytics = _analytics(creds)
-    if analytics:
-        print("[cm] analytics client ready (readonly if scope exists)")
-    else:
-        print("[cm] analytics client not built")
-
     proposed = _gemini_actions(snapshot)
     if not proposed:
         print("[cm] no actions proposed")
         _append_log({"type": "noop", "count": len(snapshot), "duplicates": list(dupes)[:5]})
+        print("=" * 60)
         return 0
 
     applied = 0

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -17,6 +19,7 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 DEFAULT_TOKEN_PATH = "token.json"
 GAMING_CATEGORY_ID = "20"
 SHARED_TAGS = ["contentcreator", "viral", "roblox", "shorts"]
+PUBLISHED_LOG = "published_log.json"
 
 # Game name FIRST (search), then a unique hook. Rotate so we never republish the same title.
 SEO_TITLE_POOLS = {
@@ -70,6 +73,37 @@ class UploadResult:
     video_id: str
     video_url: str
     publish_at: str = ""
+
+
+def record_published_video(video_id: str, title: str = "", video_url: str = "") -> None:
+    """Append an uploaded video id so channel_manager can read stats without extra OAuth scopes."""
+    vid = (video_id or "").strip()
+    if not vid:
+        return
+    rows: list = []
+    if os.path.isfile(PUBLISHED_LOG):
+        try:
+            rows = json.loads(open(PUBLISHED_LOG, encoding="utf-8").read())
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        rows = []
+    if any((r or {}).get("video_id") == vid for r in rows if isinstance(r, dict)):
+        return
+    rows.append(
+        {
+            "video_id": vid,
+            "title": title or "",
+            "video_url": video_url or f"https://www.youtube.com/watch?v={vid}",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    try:
+        with open(PUBLISHED_LOG, "w", encoding="utf-8") as f:
+            json.dump(rows[-400:], f, indent=2)
+        print(f"[yt] logged {vid} in {PUBLISHED_LOG}")
+    except Exception as exc:
+        print(f"[yt] published_log write skipped: {exc}")
 
 
 def _match_key(text: str) -> str:
@@ -208,6 +242,7 @@ def upload_video(
 
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         print(f"[yt] public now: {video_url}")
+        record_published_video(video_id, title, video_url)
         return UploadResult(video_id=video_id, video_url=video_url, publish_at="")
 
     except HttpError as exc:
