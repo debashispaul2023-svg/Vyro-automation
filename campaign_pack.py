@@ -1,4 +1,4 @@
-"""Voice/caption pack override. Long spoken script, captions through talk, CTA after voice."""
+"""Voice/caption pack override. Long script, full final CTA, no mid-cut."""
 from __future__ import annotations
 
 import os
@@ -6,27 +6,57 @@ import re
 import shutil
 import subprocess
 
+# Body does NOT say the required last line. That line is spoken once, in full, as CTA.
 ANIME_SCRIPTS = [
     (
         "WAIT. Watch this Roblox game. You spin the wheel. You unlock a character. "
         "You place them on your plot. They make money while you play. "
         "Buy potions for better luck. Then rebirth for a permanent boost. "
-        "That is the whole loop. Keep rolling. Keep building. "
-        "Game is called Roll Anime Girls on Roblox."
+        "That is the whole loop. Keep rolling. Keep building."
     ),
     (
         "You roll. You unlock a character. You place them on your plot. "
         "They make money. Buy potions for better luck. Then rebirth for a permanent boost. "
-        "Rare pulls change your whole base. Keep rolling. Keep building. "
-        "Game is called Roll Anime Girls on Roblox."
+        "Rare pulls change your whole base. Keep rolling. Keep building."
     ),
     (
         "This Roblox game is an RNG tycoon. Over two hundred characters to roll. "
         "Place them on your plot and they earn. Upgrade luck. Rebirth. Climb faster. "
-        "Keep rolling. Keep building. "
-        "Game is called Roll Anime Girls on Roblox."
+        "Keep rolling. Keep building."
     ),
 ]
+FULL_CTA = "Game is called Roll Anime Girls on Roblox."
+ATEMPO = 1.08
+
+
+def _apad(path: str, extra: float = 0.45) -> None:
+    if not path or not os.path.isfile(path):
+        return
+    tmp = path + ".pad.wav"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-af", f"apad=pad_dur={extra:.2f}", tmp],
+            check=True, capture_output=True, timeout=30,
+        )
+        if os.path.isfile(tmp) and os.path.getsize(tmp) > 200:
+            shutil.move(tmp, path)
+    except Exception as exc:
+        print(f"[voice] apad skipped: {exc}")
+
+
+def _scale_words(words: list, tempo: float) -> list:
+    if not words or tempo <= 0:
+        return words
+    out = []
+    for w in words:
+        row = dict(w)
+        try:
+            row["start"] = float(w.get("start") or 0) / tempo
+            row["end"] = float(w.get("end") or 0) / tempo
+        except (TypeError, ValueError):
+            pass
+        out.append(row)
+    return out
 
 
 def install(ns: dict) -> None:
@@ -35,16 +65,16 @@ def install(ns: dict) -> None:
         print("[voice] host pack missing — override skipped")
         return
 
-    def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 2.4) -> float:
+    def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 3.2) -> float:
         probe = ns["_probe_dur"]
         body_d = probe(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
         dur = probe(video_path)
         if body_d < 2 or dur <= 0:
             return dur
-        target = min(30.0, max(body_d + extra, 12.0))
-        if dur <= target + 0.35:
+        target = min(30.0, max(body_d + extra, 14.0))
+        if dur <= target + 0.2:
             print(f"[voice] keep {dur:.1f}s video; voice {body_d:.1f}s")
-            return dur
+            return max(dur, target)
         work = video_path + ".voicefit.mp4"
         try:
             subprocess.run(
@@ -54,7 +84,7 @@ def install(ns: dict) -> None:
             )
             if os.path.isfile(work) and os.path.getsize(work) > 1000:
                 shutil.move(work, video_path)
-                print(f"[voice] trimmed {dur:.1f}s -> {target:.1f}s to match voice")
+                print(f"[voice] trimmed {dur:.1f}s -> {target:.1f}s to fit full CTA")
                 return target
         except Exception as exc:
             print(f"[voice] fit skipped: {exc}")
@@ -65,7 +95,7 @@ def install(ns: dict) -> None:
         if "anime" in blob or "roll anime" in blob:
             plan = getattr(campaign, "_edit_plan", None) or {}
             plan["speak_text"] = "Roll Anime Girls"
-            plan["cta_text"] = "Game is called Roll Anime Girls on Roblox"
+            plan["cta_text"] = FULL_CTA
             plan["end_title"] = "ROLL ANIME GIRLS"
             plan["need_spoken_voice"] = True
             plan["need_captions"] = True
@@ -91,7 +121,6 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
     probe = ns["_probe_dur"]
     font = ns["_font"]()
     hook_line = ns["_hook_line"]
-    end_cta_line = ns["_end_cta_line"]
     phrases_from_words = ns.get("phrases_from_words")
     caption_groups = ns["_caption_groups"]
     layout_voice = ns["_layout_voice"]
@@ -100,24 +129,35 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
     from tts_engine import phrases_from_words as _pfw
     if phrases_from_words is None:
         phrases_from_words = _pfw
+
     body_wav = "output/fisch_body.wav"
     cta_wav = "output/fisch_cta.wav"
     tts = "output/fisch_tts.wav"
     work = "output/fisch_pack.mp4"
     os.makedirs("output", exist_ok=True)
+
     tts_spoken.last_words = []
     body_ok = tts_spoken(spoken, body_wav)
-    body_words = list(getattr(tts_spoken, "last_words", []) or [])
-    cta_line = end_cta_line(blob)
-    cta_ok = tts_spoken(cta_line + ".", cta_wav)
+    body_words = _scale_words(list(getattr(tts_spoken, "last_words", []) or []), ATEMPO)
+    _apad(body_wav, 0.35)
+    cta_ok = tts_spoken(FULL_CTA, cta_wav)
+    _apad(cta_wav, 0.55)
     tts_spoken.last_words = body_words
     if not body_ok:
         raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
-    dur = fit(video_path, body_wav, extra=2.4)
+
+    body_d = probe(body_wav) if os.path.isfile(body_wav) else 0.0
+    cta_d = probe(cta_wav) if cta_ok and os.path.isfile(cta_wav) else 2.6
+    need = body_d + max(cta_d, 2.4) + 0.25
+    dur = fit(video_path, body_wav, extra=max(3.2, cta_d + 0.4))
+    if dur < need:
+        dur = need
+        print(f"[voice] extend timeline to {dur:.1f}s so CTA can finish")
     tts_ok = layout_voice(body_wav, "", tts, dur)
     if not tts_ok:
         shutil.copy(body_wav, tts)
         tts_ok = True
+
     words = list(getattr(tts_spoken, "last_words", []) or [])
     groups = phrases_from_words(words, spoken) or caption_groups(words, spoken)
     flat = []
@@ -133,15 +173,16 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
             flat.append((t, min(b, t + span), " ".join(chunk)))
             t += span
     groups = flat
-    voice_end = probe(tts) if os.path.isfile(tts) else 0.0
-    if not voice_end and groups:
-        voice_end = max(float(b) for _, b, _ in groups)
-    cta_a = voice_end + 0.10 if voice_end >= 2.0 else max(0.0, dur - 2.0)
-    cta_a = min(max(2.2, cta_a), max(2.2, dur - 1.4))
-    hook_b = min(1.15, max(0.9, cta_a - 0.15))
-    print(f"[pack] voice_end={voice_end:.1f}s cta_from={cta_a:.1f}s video={dur:.1f}s")
+
+    voice_end = probe(tts) if os.path.isfile(tts) else body_d
+    # CTA starts AFTER the body finishes — never overlap the last words.
+    cta_a = max(voice_end + 0.12, 3.0)
+    if cta_a + cta_d + 0.2 > dur:
+        dur = min(30.0, cta_a + cta_d + 0.25)
+    hook_b = min(1.15, max(0.9, cta_a - 0.2))
+    print(f"[pack] voice_end={voice_end:.1f}s cta_from={cta_a:.1f}s cta_dur={cta_d:.1f}s video={dur:.1f}s")
+
     hook_txt = hook_line(blob)
-    end_cta = end_cta_line(blob)
     parts = []
     safe_hook = hook_txt.replace("\\", " ").replace("'", "").replace(":", " -")[:36]
     parts.append(
@@ -150,10 +191,6 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
         f"x=(w-text_w)/2:y=h*0.18:enable='between(t,0,{hook_b:.2f})'"
     )
     skip_words = {"yo", "yo.", "wait", "wait.", "look", "look.", "this"}
-    if groups:
-        la, lb, lt = groups[-1]
-        if lb < cta_a - 0.08:
-            groups[-1] = (la, cta_a - 0.08, lt)
     for a, b, txt in groups:
         if b <= a or not txt:
             continue
@@ -174,21 +211,15 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
             f"borderw=5:bordercolor=black:"
             f"x=(w-text_w)/2:y=h*0.72:enable='between(t,{a:.2f},{b:.2f})'"
         )
-    safe_cta = end_cta.replace("\\", " ").replace("'", "")[:48]
+    # Full required line on screen for the whole CTA window.
     parts.append(
-        f"drawtext={font}text='{safe_cta}':fontcolor=0x001033:fontsize=64:"
-        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=22:"
+        f"drawtext={font}text='Game is called Roll Anime Girls on Roblox':fontcolor=0x001033:fontsize=52:"
+        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=18:"
         f"x=(w-text_w)/2:y=h*0.70:enable='between(t,{cta_a:.2f},{dur:.2f})'"
-    )
-    safe_game = "Roll Anime Girls on Roblox"
-    parts.append(
-        f"drawtext={font}text='{safe_game}':fontcolor=white:fontsize=48:"
-        f"borderw=5:bordercolor=black:"
-        f"x=(w-text_w)/2:y=h*0.80:enable='between(t,{cta_a:.2f},{dur:.2f})'"
     )
     caption_vf = ",".join(parts) if parts else "null"
     draw = caption_vf
-    end_at = max(0.0, dur - 2.0)
+    end_at = max(cta_a, dur - 2.2)
     en = f"gte(t,{end_at:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
@@ -227,7 +258,7 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
         audio = "[0:a]volume=0.12[ag];[1:a]volume=2.1[ab];"
         if extra_a >= 2:
             audio += (
-                f"[2:a]adelay={cta_ms}|{cta_ms},volume=1.55[ac];"
+                f"[2:a]adelay={cta_ms}|{cta_ms},volume=2.0[ac];"
                 "[ag][ab][ac]amix=inputs=3:duration=longest:dropout_transition=0[a]"
             )
         else:
@@ -241,7 +272,7 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
         subprocess.run(ff, check=True, capture_output=True, timeout=300)
         if os.path.isfile(work) and os.path.getsize(work) > 1000:
             shutil.move(work, video_path)
-            print("[pack] long voice + captions burned in")
+            print("[pack] long voice + full CTA burned in")
         else:
             raise RuntimeError("pack output missing")
     except Exception as exc:
