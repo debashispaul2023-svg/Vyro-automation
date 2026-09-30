@@ -1,0 +1,8 @@
+[
+  {
+    "type": "noop",
+    "reason": "no snapshot",
+    "timestamp": "2026-09-30T09:33:21.339926+00:00",
+    "applied": false
+  }
+]
