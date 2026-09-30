@@ -52,8 +52,9 @@ jobs:
           WHOP_ENABLE_DISCOVER: "0"
         run: python test_campaign_flow.py
 
+      # Off until the edit is good. Flip to `if: always()` to attach short.mp4 again.
       - name: Publish raw short.mp4
-        if: always()
+        if: false
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
