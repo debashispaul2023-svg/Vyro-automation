@@ -62,7 +62,7 @@ jobs:
           if token is None:
               token = try_b64(raw_json) or try_b64(raw_b64)
           if not token:
-              print("No usable YouTube token — channel manager will no-op")
+              print("No usable YouTube token — public API-key path still works")
               sys.exit(0)
           with open("token.json", "w", encoding="utf-8") as f:
               json.dump(json.loads(token), f)
@@ -74,6 +74,10 @@ jobs:
           PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_CHANNEL_HANDLE: ${{ secrets.YOUTUBE_CHANNEL_HANDLE }}
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
           # Leave unset / false until dry-run logs look safe.
           # CHANNEL_MANAGER_APPLY_CHANGES: "true"
         run: python channel_manager.py
@@ -83,9 +87,11 @@ jobs:
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          if [ -f channel_manager_actions.json ]; then
-            git add channel_manager_actions.json
-          fi
+          for f in channel_manager_actions.json published_log.json; do
+            if [ -f "$f" ]; then
+              git add "$f"
+            fi
+          done
           if git diff --staged --quiet; then
             echo "No channel-manager log changes"
           else
