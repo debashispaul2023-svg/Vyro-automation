@@ -1,4 +1,4 @@
-"""Roll Anime Girls pack: footage-first story, not an ad read."""
+"""Roll Anime Girls pack: gameplay-first, CTA only in the last 1.5–2s."""
 from __future__ import annotations
 
 import os
@@ -6,21 +6,17 @@ import re
 import shutil
 import subprocess
 
-# Story: MONEY → ROLL → PLACE → EARN → short progression → CTA
-# Never start WAIT / Today we're playing / This Roblox game / Roll Anime Girls is...
 ANIME_SCRIPTS = [
     (
         "This plot just started printing money. "
         "I still had spins left. So I used them. "
         "You roll. You drop them on your plot. "
-        "They keep earning. Even if you walk away. "
-        "Luck pots help the next roll. Rebirth locks the boost in."
+        "They keep earning. Even if you walk away."
     ),
     (
         "Look at the money on this plot. "
         "I dumped the rest of my spins. "
-        "Roll. Place them. They start earning. "
-        "That is the whole run."
+        "Roll. Place them. They start earning."
     ),
     (
         "I left the plot running. Came back to this. "
@@ -32,6 +28,7 @@ FULL_CTA = "Try Roll Anime Girls on Roblox."
 HOOK_TEXT = "PRINTING MONEY"
 CTA_TEXT = "Try Roll Anime Girls on Roblox"
 ATEMPO = 1.08
+CTA_HOLD = 1.85
 BANNED_OPEN = (
     "wait. watch this",
     "today we're playing",
@@ -73,8 +70,65 @@ def _scale_words(words: list, tempo: float) -> list:
 
 def _safe_draw(text: str, limit: int = 36) -> str:
     safe = re.sub(r"\s+", " ", (text or "").replace("\\", " ").replace("\n", " ").replace("'", ""))
-    safe = safe.replace(":", " -")[:limit]
-    return safe
+    return safe.replace(":", " -")[:limit]
+
+
+def _punch_open(ns: dict, video_path: str) -> None:
+    """First 3s: at least 2 hard visual changes from different timestamps."""
+    probe = ns["_probe_dur"]
+    dur = probe(video_path)
+    if dur < 8:
+        return
+    os.makedirs("work/open", exist_ok=True)
+    slices = [
+        (0.05, 0.95),
+        (min(4.2, dur - 3.2), 0.95),
+        (min(8.4, dur - 2.1), 0.95),
+    ]
+    parts = []
+    for i, (ss, ln) in enumerate(slices):
+        out = f"work/open/cut_{i}.mp4"
+        z = 1.0 + (0.08 * i)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-ss", f"{ss:.2f}", "-t", f"{ln:.2f}", "-i", video_path,
+                    "-vf", f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='{z}':d=1:s=1080x1920",
+                    "-r", "30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", out,
+                ],
+                check=True, capture_output=True, timeout=40,
+            )
+            if os.path.isfile(out) and os.path.getsize(out) > 1000:
+                parts.append(out)
+        except Exception as exc:
+            print(f"[open] slice {i} skipped: {exc}")
+    if len(parts) < 2:
+        print("[open] not enough punches — keep source")
+        return
+    rest = "work/open/rest.mp4"
+    opened = "work/open/opened.mp4"
+    lst = "work/open/list.txt"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "2.90", "-i", video_path, "-c:v", "libx264",
+             "-preset", "veryfast", "-crf", "20", "-c:a", "aac", rest],
+            check=True, capture_output=True, timeout=90,
+        )
+        with open(lst, "w", encoding="utf-8") as f:
+            for p in parts:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+            if os.path.isfile(rest):
+                f.write(f"file '{os.path.abspath(rest)}'\n")
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", opened],
+            check=True, capture_output=True, timeout=90,
+        )
+        if os.path.isfile(opened) and os.path.getsize(opened) > 1000:
+            shutil.move(opened, video_path)
+            print(f"[open] {len(parts)} visual changes in first 3s")
+    except Exception as exc:
+        print(f"[open] rebuild skipped: {exc}")
 
 
 def install(ns: dict) -> None:
@@ -83,13 +137,14 @@ def install(ns: dict) -> None:
         print("[voice] host pack missing — override skipped")
         return
 
-    def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 3.4) -> float:
+    def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 2.2) -> float:
         probe = ns["_probe_dur"]
         body_d = probe(body_wav) if body_wav and os.path.isfile(body_wav) else 0.0
         dur = probe(video_path)
         if body_d < 2 or dur <= 0:
             return dur
-        target = min(25.0, max(body_d + extra, 16.0))
+        # Body + small gap + 1.85s CTA. Do not stretch dead air.
+        target = min(22.0, max(body_d + extra, 15.0))
         if dur <= target + 0.2:
             print(f"[voice] keep {dur:.1f}s video; voice {body_d:.1f}s")
             return max(dur, target)
@@ -124,10 +179,10 @@ def install(ns: dict) -> None:
             except Exception:
                 used_n = 0
             spoken = ANIME_SCRIPTS[used_n % len(ANIME_SCRIPTS)]
-            low = spoken.lower()
-            if any(b in low for b in BANNED_OPEN):
+            if any(b in spoken.lower() for b in BANNED_OPEN):
                 spoken = ANIME_SCRIPTS[0]
-            print(f"[voice] ANIME footage-first variant {used_n % len(ANIME_SCRIPTS) + 1}")
+            print(f"[voice] ANIME gameplay-first variant {used_n % len(ANIME_SCRIPTS) + 1}")
+            _punch_open(ns, video_path)
             _run_long_pack(ns, campaign, video_path, blob, spoken)
             return
         host_apply(campaign, video_path)
@@ -159,20 +214,31 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
     tts_spoken.last_words = []
     body_ok = tts_spoken(spoken, body_wav)
     body_words = _scale_words(list(getattr(tts_spoken, "last_words", []) or []), ATEMPO)
-    _apad(body_wav, 0.35)
+    _apad(body_wav, 0.25)
     cta_ok = tts_spoken(FULL_CTA, cta_wav)
-    _apad(cta_wav, 0.65)
+    _apad(cta_wav, 0.35)
     tts_spoken.last_words = body_words
     if not body_ok:
         raise RuntimeError("ElevenLabs voice required but failed — refusing silent video")
 
     body_d = probe(body_wav) if os.path.isfile(body_wav) else 0.0
-    cta_d = probe(cta_wav) if cta_ok and os.path.isfile(cta_wav) else 2.8
-    need = body_d + max(cta_d, 2.5) + 0.3
-    dur = fit(video_path, body_wav, extra=max(3.4, cta_d + 0.5))
-    if dur < need:
-        dur = min(25.0, need)
-        print(f"[voice] extend timeline to {dur:.1f}s so CTA can finish")
+    cta_d = probe(cta_wav) if cta_ok and os.path.isfile(cta_wav) else 2.0
+    dur = fit(video_path, body_wav, extra=CTA_HOLD + 0.35)
+    # CTA window is ONLY the last 1.5–2s — never earlier.
+    cta_a = max(0.0, dur - CTA_HOLD)
+    if body_d > cta_a - 0.12 and os.path.isfile(body_wav):
+        trimmed = body_wav + ".pre_cta.wav"
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", body_wav, "-t", f"{max(2.0, cta_a - 0.12):.2f}", trimmed],
+                check=True, capture_output=True, timeout=20,
+            )
+            if os.path.isfile(trimmed):
+                shutil.move(trimmed, body_wav)
+                body_d = probe(body_wav)
+                print(f"[voice] body cut to {body_d:.1f}s so CTA owns the last {CTA_HOLD:.1f}s")
+        except Exception as exc:
+            print(f"[voice] body trim skipped: {exc}")
     tts_ok = layout_voice(body_wav, "", tts, dur)
     if not tts_ok:
         shutil.copy(body_wav, tts)
@@ -180,44 +246,43 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
 
     words = list(getattr(tts_spoken, "last_words", []) or [])
     groups = phrases_from_words(words, spoken) or caption_groups(words, spoken)
-    # Short on-screen labels only — no full-sentence ad blocks.
     label_map = [
         ("printing money", "PRINTING MONEY"),
+        ("look at the money", "PRINTING MONEY"),
         ("spins left", "SPINS LEFT"),
         ("dumped the rest", "SPINS LEFT"),
-        ("left the plot", "LEFT IT RUNNING"),
-        ("you roll", "ROLL → PLOT"),
-        ("roll. place", "ROLL → PLOT"),
-        ("rolled again", "ROLL → PLOT"),
+        ("you roll", "ROLL"),
+        ("roll. place", "ROLL"),
+        ("rolled again", "ROLL"),
+        ("drop them", "ON THE PLOT"),
+        ("dropped the next", "ON THE PLOT"),
         ("keep earning", "THEY EARN"),
+        ("start earning", "THEY EARN"),
         ("print money", "THEY EARN"),
-        ("luck pots", "LUCK / REBIRTH"),
-        ("rebirth", "LUCK / REBIRTH"),
-        ("whole run", "THEY EARN"),
     ]
     labeled = []
+    seen = set()
     for a, b, line in groups:
         low = (line or "").lower()
-        tag = None
+        tag = ""
         for needle, cap in label_map:
             if needle in low:
                 tag = cap
                 break
-        labeled.append((a, b, tag or ""))
-    groups = [(a, b, t) for a, b, t in labeled if t]
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        labeled.append((a, min(b, a + 1.15), tag))
+    groups = labeled
 
-    voice_end = probe(tts) if os.path.isfile(tts) else body_d
-    cta_a = max(voice_end + 0.15, 3.0)
-    if cta_a + cta_d + 0.25 > dur:
-        dur = min(25.0, cta_a + cta_d + 0.3)
-    hook_b = 1.05
-    print(f"[pack] voice_end={voice_end:.1f}s cta_from={cta_a:.1f}s cta_dur={cta_d:.1f}s video={dur:.1f}s")
+    print(f"[pack] voice_end={body_d:.1f}s cta_from={cta_a:.1f}s hold={CTA_HOLD:.1f}s video={dur:.1f}s")
     print(f"[pack] hook={HOOK_TEXT!r} cta={FULL_CTA!r}")
 
     parts = []
+    hook_b = 0.90
     parts.append(
-        f"drawtext={font}text='{_safe_draw(HOOK_TEXT, 28)}':fontcolor=white:fontsize=64:"
-        f"borderw=6:bordercolor=black:"
+        f"drawtext={font}text='{_safe_draw(HOOK_TEXT, 22)}':fontcolor=white:fontsize=60:"
+        f"borderw=5:bordercolor=black:"
         f"x=(w-text_w)/2:y=h*0.16:enable='between(t,0,{hook_b:.2f})'"
     )
     for a, b, txt in groups:
@@ -225,34 +290,34 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
             continue
         if a < hook_b:
             a = hook_b
-        if a >= cta_a - 0.08:
+        if a >= cta_a - 0.10:
             continue
-        b = min(b, cta_a - 0.08)
+        b = min(b, cta_a - 0.10, a + 1.2)
         if b <= a:
             continue
         parts.append(
-            f"drawtext={font}text='{_safe_draw(txt, 22)}':fontcolor=white:fontsize=52:"
-            f"borderw=5:bordercolor=black:"
-            f"x=(w-text_w)/2:y=h*0.78:enable='between(t,{a:.2f},{b:.2f})'"
+            f"drawtext={font}text='{_safe_draw(txt, 18)}':fontcolor=white:fontsize=48:"
+            f"borderw=4:bordercolor=black:"
+            f"x=(w-text_w)/2:y=h*0.80:enable='between(t,{a:.2f},{b:.2f})'"
         )
+    # CTA text ONLY in the final 1.5–2s — then gone with the video.
     parts.append(
-        f"drawtext={font}text='{_safe_draw(CTA_TEXT, 42)}':fontcolor=0x001033:fontsize=48:"
-        f"box=1:boxcolor=0xB8FF00@0.95:boxborderw=16:"
-        f"x=(w-text_w)/2:y=h*0.72:enable='between(t,{cta_a:.2f},{dur:.2f})'"
+        f"drawtext={font}text='{_safe_draw(CTA_TEXT, 40)}':fontcolor=white:fontsize=44:"
+        f"borderw=5:bordercolor=black:"
+        f"x=(w-text_w)/2:y=h*0.74:enable='between(t,{cta_a:.2f},{dur:.2f})'"
     )
     caption_vf = ",".join(parts) if parts else "null"
     draw = caption_vf
-    icon_from = max(cta_a, dur - 2.0)
-    en = f"gte(t,{icon_from:.2f})"
+    en = f"gte(t,{cta_a:.2f})"
     icon = next((p for p in ("output/game_icon.png", "output/game_icon.jpg") if os.path.isfile(p)), "")
     if icon:
         draw = (
             f"[0:v]{draw}[base];"
-            f"[1:v]scale=820:820:force_original_aspect_ratio=decrease,"
-            f"pad=840:840:(ow-iw)/2:(oh-ih)/2:white[ic];"
-            f"[base][ic]overlay=(W-w)/2:H-h-90:enable='{en}'[v]"
+            f"[1:v]scale=780:780:force_original_aspect_ratio=decrease,"
+            f"pad=800:800:(ow-iw)/2:(oh-ih)/2:white[ic];"
+            f"[base][ic]overlay=(W-w)/2:H-h-110:enable='{en}'[v]"
         )
-        print(f"[pack] icon from {icon_from:.1f}s to {dur:.1f}s")
+        print(f"[pack] icon+CTA only {cta_a:.1f}s–{dur:.1f}s")
     cta_ms = int(max(0.0, cta_a) * 1000)
     ff = ["ffmpeg", "-y", "-i", video_path]
     extra_a = 0
@@ -296,7 +361,7 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
         subprocess.run(ff, check=True, capture_output=True, timeout=300)
         if os.path.isfile(work) and os.path.getsize(work) > 1000:
             shutil.move(work, video_path)
-            print("[pack] footage-first voice + Try CTA burned in")
+            print("[pack] gameplay-first + last-window CTA burned in")
         else:
             raise RuntimeError("pack output missing")
     except Exception as exc:
