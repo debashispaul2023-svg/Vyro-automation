@@ -93,7 +93,6 @@ jobs:
       - name: Run daily pipeline
         env:
           PYTHONUNBUFFERED: "1"
-          CLIP_REUSE: "1"
           VYRO_SESSION_COOKIE: ${{ secrets.VYRO_SESSION_COOKIE }}
           WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
