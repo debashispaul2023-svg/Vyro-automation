@@ -1,4 +1,4 @@
-"""Restore wrapper. Full runner lives in daily_runner-2.py after a bad overwrite."""
+"""Load daily_runner-2 then install voice/caption override."""
 from __future__ import annotations
 
 import importlib.util
@@ -13,6 +13,13 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["daily_runner_impl"] = _mod
 _spec.loader.exec_module(_mod)
 globals().update(vars(_mod))
+
+try:
+    import campaign_pack
+    campaign_pack.install(globals())
+    campaign_pack.install(vars(_mod))
+except Exception as exc:
+    print(f"[voice] override not loaded: {exc}")
 
 if __name__ == "__main__":
     raise SystemExit(int(_mod.main() or 0))
