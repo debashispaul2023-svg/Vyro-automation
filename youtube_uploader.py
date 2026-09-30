@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass
 
 from google.auth.transport.requests import Request
@@ -17,11 +18,46 @@ DEFAULT_TOKEN_PATH = "token.json"
 GAMING_CATEGORY_ID = "20"
 SHARED_TAGS = ["contentcreator", "viral", "roblox", "shorts"]
 
-SEO_TITLES = {
-    "roll anime girls": "I rolled 200 anime girls in this Roblox RNG #shorts",
-    "steal a seed": "I stole every seed in this Roblox game #shorts",
-    "how to fisch": "This Roblox fishing FPS is actually insane #shorts",
-    "tongue escape": "Your tongue keeps GROWING in this Roblox game #shorts",
+# Game name FIRST (search), then a unique hook. Rotate so we never republish the same title.
+SEO_TITLE_POOLS = {
+    "roll anime girls": [
+        "Roll Anime Girls Roblox — why does this print cash AFK? #shorts",
+        "How to play Roll Anime Girls on Roblox (rare pull) #shorts",
+        "Roll Anime Girls Roblox RNG — I rolled 200 #shorts",
+        "Roll Anime Girls Roblox — place them and go AFK #shorts",
+        "What is Roll Anime Girls on Roblox? RNG money plot #shorts",
+    ],
+    "how to fisch": [
+        "How to Fisch Roblox — this fishing FPS slaps #shorts",
+        "How to play How to Fisch on Roblox #shorts",
+        "How to Fisch Roblox — catch fish then fight #shorts",
+        "What is How to Fisch on Roblox? #shorts",
+    ],
+    "tongue escape": [
+        "+1 Tongue Escape Roblox — your tongue is the path #shorts",
+        "How to play +1 Tongue Escape on Roblox #shorts",
+        "+1 Tongue Escape Roblox — don't fall #shorts",
+    ],
+    "steal a seed": [
+        "Steal A Seed Roblox — I stole every seed #shorts",
+        "How to play Steal A Seed on Roblox #shorts",
+        "Steal A Seed Roblox garden heist #shorts",
+    ],
+}
+
+SEO_DESCRIPTIONS = {
+    "roll anime girls": (
+        "Why does this Roblox RNG keep printing cash while you AFK?\n"
+        "Roll units, place them on your plot, then the money stacks offline.\n"
+        "Game is called Roll Anime Girls on Roblox.\n"
+        "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
+    ),
+    "how to fisch": (
+        "What is this Roblox game where you catch fish then fight?\n"
+        "Catch strange fish, upgrade gear, survive.\n"
+        "Game is called How to Fisch on Roblox.\n"
+        "https://www.roblox.com/games/119870009085173/How-to-Fisch"
+    ),
 }
 
 
@@ -36,16 +72,32 @@ class UploadResult:
     publish_at: str = ""
 
 
+def _match_key(text: str) -> str:
+    low = (text or "").lower()
+    for key in SEO_TITLE_POOLS:
+        if key in low:
+            return key
+    return ""
+
+
 def _seo_title(title: str) -> str:
     raw = re.sub(r"\s+", " ", title or "").strip()
-    low = raw.lower().replace("#shorts", "").strip(" -|")
-    for key, better in SEO_TITLES.items():
-        if low == key or low.startswith(key):
-            print(f"[yt] SEO title rewrite: {raw!r} -> {better!r}")
-            return better
+    key = _match_key(raw)
+    if key:
+        pool = SEO_TITLE_POOLS[key]
+        pick = pool[int(time.time()) % len(pool)]
+        print(f"[yt] SEO title rotate: {raw!r} -> {pick!r}")
+        return pick[:100]
     if raw and "#shorts" not in raw.lower():
         raw = raw[:88].rstrip() + " #shorts"
     return raw or "Roblox short #shorts"
+
+
+def _seo_description(title: str, description: str) -> str:
+    key = _match_key(title + " " + (description or ""))
+    if key and key in SEO_DESCRIPTIONS:
+        return SEO_DESCRIPTIONS[key]
+    return description or ""
 
 
 def _load_credentials(token_path: str = DEFAULT_TOKEN_PATH) -> Credentials:
@@ -104,16 +156,22 @@ def upload_video(
     privacy_status: str = "public",
     token_path: str = DEFAULT_TOKEN_PATH,
 ) -> UploadResult:
-    """Always publish public immediately. Same tags as Instagram caption."""
+    """Always publish public immediately. YouTube is the main platform."""
     if not os.path.isfile(video_path):
         raise UploadError(f"Video file not found: {video_path}")
 
     title = _seo_title(title)
+    description = _seo_description(title, description)
     creds = _load_credentials(token_path)
-    tag_list = _clean_tags(tags + ["Roblox", "RobloxRNG", "RollAnimeGirls"])
+    extra = []
+    if "roll anime" in title.lower():
+        extra = ["RollAnimeGirls", "RobloxRNG", "Roblox"]
+    elif "fisch" in title.lower():
+        extra = ["HowToFisch", "Fisch", "Roblox"]
+    tag_list = _clean_tags(list(tags or []) + extra)
     desc = _with_hashtags(description, tag_list)
     print(
-        f"[yt] category=Gaming({GAMING_CATEGORY_ID}) AI=yes "
+        f"[yt] MAIN category=Gaming({GAMING_CATEGORY_ID}) AI=yes "
         f"privacy=public title={title!r} tags={tag_list}"
     )
 
