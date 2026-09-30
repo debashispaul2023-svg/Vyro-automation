@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -21,46 +20,28 @@ GAMING_CATEGORY_ID = "20"
 SHARED_TAGS = ["contentcreator", "viral", "roblox", "shorts"]
 PUBLISHED_LOG = "published_log.json"
 
-# Game name FIRST (search), then a unique hook. Rotate so we never republish the same title.
-SEO_TITLE_POOLS = {
-    "roll anime girls": [
-        "Roll Anime Girls Roblox — why does this print cash AFK? #shorts",
-        "How to play Roll Anime Girls on Roblox (rare pull) #shorts",
-        "Roll Anime Girls Roblox RNG — I rolled 200 #shorts",
-        "Roll Anime Girls Roblox — place them and go AFK #shorts",
-        "What is Roll Anime Girls on Roblox? RNG money plot #shorts",
-    ],
-    "how to fisch": [
-        "How to Fisch Roblox — this fishing FPS slaps #shorts",
-        "How to play How to Fisch on Roblox #shorts",
-        "How to Fisch Roblox — catch fish then fight #shorts",
-        "What is How to Fisch on Roblox? #shorts",
-    ],
-    "tongue escape": [
-        "+1 Tongue Escape Roblox — your tongue is the path #shorts",
-        "How to play +1 Tongue Escape on Roblox #shorts",
-        "+1 Tongue Escape Roblox — don't fall #shorts",
-    ],
-    "steal a seed": [
-        "Steal A Seed Roblox — I stole every seed #shorts",
-        "How to play Steal A Seed on Roblox #shorts",
-        "Steal A Seed Roblox garden heist #shorts",
-    ],
-}
-
-SEO_DESCRIPTIONS = {
-    "roll anime girls": (
-        "Why does this Roblox RNG keep printing cash while you AFK?\n"
-        "Roll units, place them on your plot, then the money stacks offline.\n"
-        "Game is called Roll Anime Girls on Roblox.\n"
-        "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
-    ),
-    "how to fisch": (
-        "What is this Roblox game where you catch fish then fight?\n"
-        "Catch strange fish, upgrade gear, survive.\n"
-        "Game is called How to Fisch on Roblox.\n"
-        "https://www.roblox.com/games/119870009085173/How-to-Fisch"
-    ),
+# Official campaign lines — never paraphrase these.
+CAMPAIGN_LOCK = {
+    "roll anime girls": {
+        "name": "Roll Anime Girls",
+        "cta": "Game is called Roll Anime Girls on Roblox.",
+        "link": "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls",
+    },
+    "how to fisch": {
+        "name": "How to Fisch",
+        "cta": "Game is called How to Fisch on Roblox.",
+        "link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
+    },
+    "tongue escape": {
+        "name": "+1 Tongue Escape",
+        "cta": "Game is called +1 Tongue Escape on Roblox.",
+        "link": "",
+    },
+    "steal a seed": {
+        "name": "Steal A Seed",
+        "cta": "Game is called Steal A Seed on Roblox.",
+        "link": "https://www.roblox.com/games/122216176958450/Steal-A-Seed",
+    },
 }
 
 
@@ -76,7 +57,6 @@ class UploadResult:
 
 
 def record_published_video(video_id: str, title: str = "", video_url: str = "") -> None:
-    """Append an uploaded video id so channel_manager can read stats without extra OAuth scopes."""
     vid = (video_id or "").strip()
     if not vid:
         return
@@ -108,30 +88,42 @@ def record_published_video(video_id: str, title: str = "", video_url: str = "") 
 
 def _match_key(text: str) -> str:
     low = (text or "").lower()
-    for key in SEO_TITLE_POOLS:
+    for key in CAMPAIGN_LOCK:
         if key in low:
             return key
     return ""
 
 
-def _seo_title(title: str) -> str:
+def _lock_title(title: str) -> str:
+    """Keep the campaign title. Only add the official game name and #shorts if missing."""
     raw = re.sub(r"\s+", " ", title or "").strip()
     key = _match_key(raw)
-    if key:
-        pool = SEO_TITLE_POOLS[key]
-        pick = pool[int(time.time()) % len(pool)]
-        print(f"[yt] SEO title rotate: {raw!r} -> {pick!r}")
-        return pick[:100]
+    lock = CAMPAIGN_LOCK.get(key) or {}
+    name = lock.get("name") or ""
+    if name and name.lower() not in raw.lower():
+        raw = f"{name} {raw}".strip()
+        print(f"[yt] inserted official name into title: {name}")
     if raw and "#shorts" not in raw.lower():
         raw = raw[:88].rstrip() + " #shorts"
+    raw = raw[:100].rstrip()
+    print(f"[yt] requirement title kept: {raw!r}")
     return raw or "Roblox short #shorts"
 
 
-def _seo_description(title: str, description: str) -> str:
-    key = _match_key(title + " " + (description or ""))
-    if key and key in SEO_DESCRIPTIONS:
-        return SEO_DESCRIPTIONS[key]
-    return description or ""
+def _lock_description(title: str, description: str) -> str:
+    """Keep campaign description. Append official CTA + game link word-for-word if absent."""
+    body = (description or "").strip()
+    key = _match_key(title + " " + body)
+    lock = CAMPAIGN_LOCK.get(key) or {}
+    cta = (lock.get("cta") or "").strip()
+    link = (lock.get("link") or "").strip()
+    if cta and cta.lower() not in body.lower():
+        body = f"{body}\n{cta}".strip() if body else cta
+        print(f"[yt] appended official CTA word-for-word")
+    if link and link not in body:
+        body = f"{body}\n{link}".strip()
+        print(f"[yt] appended official game link")
+    return body
 
 
 def _load_credentials(token_path: str = DEFAULT_TOKEN_PATH) -> Credentials:
@@ -194,8 +186,8 @@ def upload_video(
     if not os.path.isfile(video_path):
         raise UploadError(f"Video file not found: {video_path}")
 
-    title = _seo_title(title)
-    description = _seo_description(title, description)
+    title = _lock_title(title)
+    description = _lock_description(title, description)
     creds = _load_credentials(token_path)
     extra = []
     if "roll anime" in title.lower():
