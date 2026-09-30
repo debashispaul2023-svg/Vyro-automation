@@ -1,4 +1,4 @@
-"""Load daily_runner-2 then install voice/caption override."""
+"""Load daily_runner-2 then install voice + story overrides."""
 from __future__ import annotations
 
 import importlib.util
@@ -20,6 +20,13 @@ try:
     campaign_pack.install(vars(_mod))
 except Exception as exc:
     print(f"[voice] override not loaded: {exc}")
+
+try:
+    import story_engine
+    story_engine.attach(globals())
+    story_engine.attach(vars(_mod))
+except Exception as exc:
+    print(f"[story] attach skipped: {exc}")
 
 if __name__ == "__main__":
     raise SystemExit(int(_mod.main() or 0))
