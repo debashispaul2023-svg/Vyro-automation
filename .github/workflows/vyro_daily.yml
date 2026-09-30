@@ -121,7 +121,7 @@ jobs:
         run: |
           git config user.name "vyro-bot"
           git config user.email "vyro-bot@users.noreply.github.com"
-          for f in processed_clips.json processed_campaigns.json youtube_schedule.json; do
+          for f in processed_clips.json processed_campaigns.json youtube_schedule.json published_log.json; do
             if [ -f "$f" ]; then
               git add "$f"
             fi
