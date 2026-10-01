@@ -32,31 +32,29 @@ except Exception as exc:
     print(f"[story] attach skipped: {exc}")
 
 
-# Campaign title must name the game, show the loop, and stay under 100 chars.
+# Keyword in the first 40 chars. One #shorts at the end. 60-char range.
 _TITLE_VARIANTS = (
-    "Roll Anime Girls: Roll Dice, Place, Earn Offline #shorts #roblox",
-    "Roll Anime Girls: Unlock, Place on Plot, Earn Offline #shorts #roblox",
-    "Roll Anime Girls on Roblox: Roll, Place, Earn Cash #shorts #roblox",
+    "Roll Anime Girls Roblox: Dice Roll, Earn Offline #shorts",
+    "Roll Anime Girls Roblox RNG: Place and Earn Offline #shorts",
+    "Roll Anime Girls on Roblox: Offline Money Tycoon #shorts",
 )
-_LOOP_LINE = "Roll the dice, unlock a character, place them on your plot, and they earn money even offline."
+_GAME_LINK = "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
+_DESC = (
+    "Roll Anime Girls is a Roblox RNG tycoon. Roll the dice, unlock a character, "
+    "place them on your plot, and they earn money even while you are offline.\n\n"
+    "Luck potions help rarer rolls. Rebirth gives permanent boosts. "
+    "Game is called Roll Anime Girls on Roblox.\n"
+    "Try Roll Anime Girls on Roblox.\n"
+    + _GAME_LINK
+    + "\n\n#shorts #roblox #rollanimegirls #rng #tycoon"
+)
 
 
 def _force_upload_title(title: str, description: str) -> tuple[str, str]:
     seed = sum(ord(c) for c in (title or "Roll Anime Girls"))
-    raw = _TITLE_VARIANTS[seed % len(_TITLE_VARIANTS)]
-    raw = raw[:100].rstrip()
-    desc = description or ""
-    if "place" not in desc.lower() or "offline" not in desc.lower():
-        desc = (_LOOP_LINE + "\n" + desc).strip()
-    for tag in ("#shorts", "#roblox", "#rollanimegirls"):
-        if tag not in desc.lower():
-            desc = (desc.rstrip() + " " + tag).strip()
-    link = "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
-    if link not in desc:
-        desc = (desc.rstrip() + "\n" + link).strip()
-    if "try roll anime girls" not in desc.lower():
-        desc = (desc.rstrip() + "\nTry Roll Anime Girls on Roblox.").strip()
-    return raw, desc
+    raw = _TITLE_VARIANTS[seed % len(_TITLE_VARIANTS)][:100].rstrip()
+    print(f"[seo] title {raw!r} ({len(raw)} chars)")
+    return raw, _DESC
 
 
 def _install_upload_guard() -> None:
