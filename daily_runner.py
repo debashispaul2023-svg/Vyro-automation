@@ -5,6 +5,9 @@ import importlib.util
 import sys
 from pathlib import Path
 
+# globals().update() copies the impl module's __name__ and would skip main().
+_IS_MAIN = __name__ == "__main__"
+
 _IMPL = Path(__file__).with_name("daily_runner-2.py")
 _spec = importlib.util.spec_from_file_location("daily_runner_impl", _IMPL)
 if _spec is None or _spec.loader is None:
@@ -28,5 +31,6 @@ try:
 except Exception as exc:
     print(f"[story] attach skipped: {exc}")
 
-if __name__ == "__main__":
+if _IS_MAIN:
+    print("[daily] main starting")
     raise SystemExit(int(_mod.main() or 0))

@@ -1,4 +1,4 @@
-"""Roll Anime Girls pack: gameplay-first, CTA only in the last 1.5-2s."""
+"""Roll Anime Girls pack: explain the loop, name once, icon + CTA at the end."""
 from __future__ import annotations
 
 import os
@@ -6,13 +6,14 @@ import re
 import shutil
 import subprocess
 
+# Reviewers reject "printing money" with no loop. Say roll, place, earn, offline.
 ANIME_SCRIPTS = [
-    "This plot just started printing money. I still had spins left. So I used them. You roll. You drop them on your plot. They keep earning. Even if you walk away.",
-    "Look at the money on this plot. I dumped the rest of my spins. Roll. Place them. They start earning.",
-    "I left the plot running. Came back to this. So I rolled again and dropped the next one on the pad. They print money while you play.",
+    "You roll the dice to unlock a character. Place that character on your plot. They earn money for you, even while you are offline. Luck potions help rarer rolls. Rebirth gives permanent boosts. The game is called Roll Anime Girls.",
+    "Here is how it works. Roll the dice. Unlock a character. Put them on your plot and they start earning cash, online and offline. Buy a luck potion for a rarer pull. Then rebirth for a permanent boost. Game is called Roll Anime Girls.",
+    "This is the gameplay loop. Roll dice, unlock a character, place them on your plot, and they generate money even if you leave. Potions boost your luck. Rebirth resets you with permanent boosts. Roll Anime Girls on Roblox.",
 ]
 FULL_CTA = "Try Roll Anime Girls on Roblox."
-HOOK_TEXT = "PRINTING MONEY"
+HOOK_TEXT = "ROLL. PLACE. EARN."
 CTA_TEXT = "Try Roll Anime Girls on Roblox"
 ATEMPO = 1.08
 CTA_HOLD = 1.85
@@ -51,6 +52,22 @@ def _safe_draw(text: str, limit: int = 36) -> str:
     return safe.replace(":", " -")[:limit]
 
 
+def _explains_loop(text: str) -> bool:
+    low = (text or "").lower()
+    has_roll = "roll" in low or "dice" in low
+    has_place = "plot" in low or "place" in low
+    has_earn = "earn" in low or "money" in low or "cash" in low
+    has_name = "roll anime girls" in low
+    return has_roll and has_place and has_earn and has_name
+
+
+def _icon_path() -> str:
+    for p in ("output/game_icon.png", "output/game_icon.jpg"):
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
 def _punch_open(ns: dict, video_path: str) -> None:
     probe = ns["_probe_dur"]
     dur = probe(video_path)
@@ -62,7 +79,7 @@ def _punch_open(ns: dict, video_path: str) -> None:
 def install(ns: dict) -> None:
     host_apply = ns.get("_apply_campaign_pack")
     if not callable(host_apply):
-        print("[voice] host pack missing — override skipped")
+        print("[voice] host pack missing \u2014 override skipped")
         return
 
     def _fit_video_to_voice(video_path: str, body_wav: str, extra: float = 2.2) -> float:
@@ -71,12 +88,15 @@ def install(ns: dict) -> None:
         dur = probe(video_path)
         if body_d < 2 or dur <= 0:
             return dur
-        target = min(22.0, max(body_d + extra, 15.0))
+        target = min(28.0, max(body_d + extra, 16.0))
         if dur <= target + 0.2:
             return max(dur, target)
         work = video_path + ".voicefit.mp4"
         try:
-            subprocess.run(["ffmpeg", "-y", "-i", video_path, "-t", f"{target:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", work], check=True, capture_output=True, timeout=90)
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", video_path, "-t", f"{target:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", work],
+                check=True, capture_output=True, timeout=90,
+            )
             if os.path.isfile(work) and os.path.getsize(work) > 1000:
                 shutil.move(work, video_path)
                 print(f"[voice] trimmed {dur:.1f}s -> {target:.1f}s")
@@ -104,14 +124,19 @@ def install(ns: dict) -> None:
             try:
                 from story_engine import load_story_script
                 body, extra_cta = load_story_script()
-                if body:
+                if body and _explains_loop(body):
                     spoken = body
                     print("[script] using footage-first story script")
+                elif body:
+                    print("[script] story script too vague \u2014 using loop explanation")
                 if extra_cta:
                     globals()["FULL_CTA"] = extra_cta
             except Exception as exc:
                 print(f"[script] story script skipped: {exc}")
-            print(f"[voice] ANIME gameplay-first variant {used_n % len(ANIME_SCRIPTS) + 1}")
+            if not _explains_loop(spoken):
+                spoken = ANIME_SCRIPTS[0]
+            print(f"[voice] ANIME loop-explain variant {used_n % len(ANIME_SCRIPTS) + 1}")
+            print(f"[voice] spoken: {spoken}")
             _run_long_pack(ns, campaign, video_path, blob, spoken)
             return
         host_apply(campaign, video_path)
@@ -138,7 +163,7 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
     cta_ok = tts_spoken(FULL_CTA, cta_wav)
     _apad(cta_wav, 0.35)
     if not body_ok:
-        print("[pack] voice failed — keep existing render")
+        print("[pack] voice failed \u2014 keep existing render")
         return
     body_d = probe(body_wav) if os.path.isfile(body_wav) else 0.0
     dur = fit(video_path, body_wav, extra=CTA_HOLD + 0.35)
@@ -148,21 +173,40 @@ def _run_long_pack(ns: dict, campaign, video_path: str, blob: str, spoken: str) 
         shutil.copy(body_wav, tts)
         tts_ok = True
     caption_vf = (
-        f"drawtext={font}text='{_safe_draw(HOOK_TEXT, 22)}':fontcolor=white:fontsize=60:"
-        f"borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.16:enable='between(t,0,0.90)',"
-        f"drawtext={font}text='{_safe_draw(CTA_TEXT, 40)}':fontcolor=white:fontsize=44:"
-        f"borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.74:enable='between(t,{cta_a:.2f},{dur:.2f})'"
+        f"drawtext={font}text='{_safe_draw(HOOK_TEXT, 22)}':fontcolor=white:fontsize=54:"
+        f"borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.16:enable='between(t,0,1.20)',"
+        f"drawtext={font}text='{_safe_draw(CTA_TEXT, 40)}':fontcolor=white:fontsize=42:"
+        f"borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.78:enable='between(t,{cta_a:.2f},{dur:.2f})'"
     )
-    print(f"[pack] voice_end={body_d:.1f}s cta_from={cta_a:.1f}s video={dur:.1f}s")
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", tts, "-filter_complex",
-           f"[0:v]{caption_vf}[v];[1:a]volume=2.1,aresample=44100,aformat=channel_layouts=stereo[a]",
-           "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-           "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-t", f"{dur:.2f}", work]
+    icon = _icon_path()
+    print(f"[pack] voice_end={body_d:.1f}s cta_from={cta_a:.1f}s video={dur:.1f}s icon={bool(icon)}")
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", tts]
+    if icon:
+        cmd += ["-i", icon]
+        fc = (
+            f"[0:v]{caption_vf}[base];"
+            f"[2:v]scale=640:640:force_original_aspect_ratio=decrease[ic];"
+            f"[base][ic]overlay=(W-w)/2:(H-h)/2-120:enable='gte(t,{cta_a:.2f})'[v];"
+            f"[1:a]volume=2.1,aresample=44100,aformat=channel_layouts=stereo[a]"
+        )
+    else:
+        fc = (
+            f"[0:v]{caption_vf}[v];"
+            f"[1:a]volume=2.1,aresample=44100,aformat=channel_layouts=stereo[a]"
+        )
+        print("[pack] no game icon on disk \u2014 CTA text only")
+    cmd += [
+        "-filter_complex", fc,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-t", f"{dur:.2f}", work,
+    ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=300)
         if os.path.isfile(work) and os.path.getsize(work) > 1000:
             shutil.move(work, video_path)
-            print("[pack] captions + voice burned (no game-audio mix)")
+            print("[pack] captions + voice burned, icon on end card" if icon else "[pack] captions + voice burned (no game-audio mix)")
             return
     except Exception as exc:
         print(f"[pack] mix failed ({exc}); keep rendered short.mp4")
