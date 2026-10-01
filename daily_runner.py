@@ -36,12 +36,19 @@ def _force_upload_title(title: str, description: str) -> tuple[str, str]:
     raw = " ".join((title or "Roll Anime Girls").split())
     if "roll anime girls" not in raw.lower():
         raw = f"Roll Anime Girls {raw}"
+    extra = []
     if "#shorts" not in raw.lower():
-        raw = raw[:88].rstrip() + " #shorts"
+        extra.append("#shorts")
+    if "#roblox" not in raw.lower():
+        extra.append("#roblox")
+    if extra:
+        add = " ".join(extra)
+        raw = (raw[: max(0, 99 - len(add) - 1)].rstrip() + " " + add).strip()
     raw = raw[:100].rstrip()
     desc = description or ""
-    if "#shorts" not in desc.lower():
-        desc = (desc.rstrip() + "\n#shorts").strip()
+    for tag in ("#shorts", "#roblox", "#rollanimegirls"):
+        if tag not in desc.lower():
+            desc = (desc.rstrip() + " " + tag).strip()
     link = "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
     if "anime" in raw.lower() and link not in desc:
         desc = (desc.rstrip() + "\n" + link).strip()
