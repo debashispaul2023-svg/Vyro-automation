@@ -1,4 +1,4 @@
-"""Upload a short to YouTube as public immediately. Gaming + AI disclosure."""
+"""Upload a short to YouTube. Next uploads stay unlisted until YOUTUBE_PRIVACY=public."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ GAMING_CATEGORY_ID = "20"
 SHARED_TAGS = ["contentcreator", "viral", "roblox", "shorts"]
 PUBLISHED_LOG = "published_log.json"
 
-# Official campaign lines — never paraphrase these.
 CAMPAIGN_LOCK = {
     "roll anime girls": {
         "name": "Roll Anime Girls",
@@ -70,14 +69,7 @@ def record_published_video(video_id: str, title: str = "", video_url: str = "") 
         rows = []
     if any((r or {}).get("video_id") == vid for r in rows if isinstance(r, dict)):
         return
-    rows.append(
-        {
-            "video_id": vid,
-            "title": title or "",
-            "video_url": video_url or f"https://www.youtube.com/watch?v={vid}",
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
+    rows.append({"video_id": vid, "title": title or "", "video_url": video_url or f"https://www.youtube.com/watch?v={vid}", "published_at": datetime.now(timezone.utc).isoformat()})
     try:
         with open(PUBLISHED_LOG, "w", encoding="utf-8") as f:
             json.dump(rows[-400:], f, indent=2)
@@ -95,14 +87,12 @@ def _match_key(text: str) -> str:
 
 
 def _lock_title(title: str) -> str:
-    """Keep the campaign title. Only add the official game name and #shorts if missing."""
     raw = re.sub(r"\s+", " ", title or "").strip()
     key = _match_key(raw)
     lock = CAMPAIGN_LOCK.get(key) or {}
     name = lock.get("name") or ""
     if name and name.lower() not in raw.lower():
         raw = f"{name} {raw}".strip()
-        print(f"[yt] inserted official name into title: {name}")
     if raw and "#shorts" not in raw.lower():
         raw = raw[:88].rstrip() + " #shorts"
     raw = raw[:100].rstrip()
@@ -111,7 +101,6 @@ def _lock_title(title: str) -> str:
 
 
 def _lock_description(title: str, description: str) -> str:
-    """Keep campaign description. Append official CTA + game link word-for-word if absent."""
     body = (description or "").strip()
     key = _match_key(title + " " + body)
     lock = CAMPAIGN_LOCK.get(key) or {}
@@ -119,19 +108,14 @@ def _lock_description(title: str, description: str) -> str:
     link = (lock.get("link") or "").strip()
     if cta and cta.lower() not in body.lower():
         body = f"{body}\n{cta}".strip() if body else cta
-        print(f"[yt] appended official CTA word-for-word")
     if link and link not in body:
         body = f"{body}\n{link}".strip()
-        print(f"[yt] appended official game link")
     return body
 
 
 def _load_credentials(token_path: str = DEFAULT_TOKEN_PATH) -> Credentials:
     if not os.path.isfile(token_path):
-        raise UploadError(
-            f"OAuth token file not found at '{token_path}'. Run the one-time "
-            f"local setup (see README) to generate it before uploading."
-        )
+        raise UploadError(f"OAuth token file not found at '{token_path}'.")
     creds = Credentials.from_authorized_user_file(token_path, SCOPES)
     if creds and creds.expired and creds.refresh_token:
         try:
@@ -141,10 +125,7 @@ def _load_credentials(token_path: str = DEFAULT_TOKEN_PATH) -> Credentials:
         with open(token_path, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
     if not creds or not creds.valid:
-        raise UploadError(
-            "OAuth token is invalid or missing a refresh token. Re-run the "
-            "one-time local setup to regenerate it."
-        )
+        raise UploadError("OAuth token is invalid or missing a refresh token.")
     return creds
 
 
@@ -173,83 +154,48 @@ def _with_hashtags(description: str, tags: list[str]) -> str:
     return body[:4900]
 
 
-def upload_video(
-    video_path: str,
-    title: str,
-    description: str,
-    tags: list[str],
-    category_id: str = GAMING_CATEGORY_ID,
-    privacy_status: str = "public",
-    token_path: str = DEFAULT_TOKEN_PATH,
-) -> UploadResult:
-    """Always publish public immediately. YouTube is the main platform."""
+def _privacy(requested: str) -> str:
+    raw = (os.environ.get("YOUTUBE_PRIVACY") or requested or "unlisted").strip().lower()
+    if raw not in ("public", "unlisted", "private"):
+        raw = "unlisted"
+    return raw
+
+
+def upload_video(video_path: str, title: str, description: str, tags: list[str], category_id: str = GAMING_CATEGORY_ID, privacy_status: str = "unlisted", token_path: str = DEFAULT_TOKEN_PATH) -> UploadResult:
+    """Upload unlisted unless YOUTUBE_PRIVACY=public."""
     if not os.path.isfile(video_path):
         raise UploadError(f"Video file not found: {video_path}")
-
     title = _lock_title(title)
     description = _lock_description(title, description)
     creds = _load_credentials(token_path)
-    extra = []
-    if "roll anime" in title.lower():
-        extra = ["RollAnimeGirls", "RobloxRNG", "Roblox"]
-    elif "fisch" in title.lower():
-        extra = ["HowToFisch", "Fisch", "Roblox"]
+    extra = ["RollAnimeGirls", "RobloxRNG", "Roblox"] if "roll anime" in title.lower() else []
     tag_list = _clean_tags(list(tags or []) + extra)
     desc = _with_hashtags(description, tag_list)
-    print(
-        f"[yt] MAIN category=Gaming({GAMING_CATEGORY_ID}) AI=yes "
-        f"privacy=public title={title!r} tags={tag_list}"
-    )
-
+    privacy = _privacy(privacy_status)
+    print(f"[yt] MAIN category=Gaming({GAMING_CATEGORY_ID}) AI=yes privacy={privacy} title={title!r} tags={tag_list}")
     try:
         youtube = build("youtube", "v3", credentials=creds)
         body = {
-            "snippet": {
-                "title": title,
-                "description": desc,
-                "tags": tag_list,
-                "categoryId": category_id or GAMING_CATEGORY_ID,
-            },
-            "status": {
-                "privacyStatus": "public",
-                "selfDeclaredMadeForKids": False,
-                "containsSyntheticMedia": True,
-            },
+            "snippet": {"title": title, "description": desc, "tags": tag_list, "categoryId": category_id or GAMING_CATEGORY_ID},
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
         }
         media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body=body,
-            media_body=media,
-        )
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
         response = None
         while response is None:
             status, response = request.next_chunk()
             if status:
                 print(f"Upload progress: {int(status.progress() * 100)}%")
-
         video_id = response.get("id")
         if not video_id:
             raise UploadError(f"Upload succeeded but no video ID returned: {response}")
-
         video_url = f"https://www.youtube.com/watch?v={video_id}"
-        print(f"[yt] public now: {video_url}")
+        print(f"[yt] {privacy} now: {video_url}")
         record_published_video(video_id, title, video_url)
         return UploadResult(video_id=video_id, video_url=video_url, publish_at="")
-
     except HttpError as exc:
         raise UploadError(f"YouTube API error during upload: {exc}") from exc
     except UploadError:
         raise
     except Exception as exc:
         raise UploadError(f"Unexpected error during YouTube upload: {exc}") from exc
-
-
-if __name__ == "__main__":
-    result = upload_video(
-        video_path="output/short.mp4",
-        title="Demo upload #shorts",
-        description="Test upload from youtube_uploader.py",
-        tags=["shorts", "demo"],
-    )
-    print(f"Uploaded: {result.video_url}")
