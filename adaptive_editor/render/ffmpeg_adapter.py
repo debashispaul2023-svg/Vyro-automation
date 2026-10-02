@@ -59,6 +59,20 @@ def concat(parts: list[str], dest: str, audio: str = "") -> bool:
         return False
 
 
+def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
+    path = os.path.abspath(srt).replace("\\", "/").replace(":", "\\:")
+    cmd = ["ffmpeg", "-y", "-i", video]
+    if audio and os.path.isfile(audio):
+        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+    cmd += ["-vf", f"subtitles='{path}'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=90)
+        return os.path.isfile(dest) and os.path.getsize(dest) > 500
+    except Exception as exc:
+        print(f"[adaptive-render] caption burn failed: {exc}")
+        return False
+
+
 def tone(dest: str, seconds: float) -> bool:
     try:
         subprocess.run(

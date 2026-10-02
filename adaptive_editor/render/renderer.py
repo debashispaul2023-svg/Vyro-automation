@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 
-from .ffmpeg_adapter import concat, probe, tone, trim
+from .captions import segments, to_srt
+from .ffmpeg_adapter import burn, concat, probe, trim
+from .tts import fixture_tts, narrate
 
 
 def render_plan(plan: dict, dest: str, work: str | None = None) -> dict:
@@ -24,11 +26,26 @@ def render_plan(plan: dict, dest: str, work: str | None = None) -> dict:
         parts.append(part)
         used.append({"role": clip.get("role"), "clip": src, "reason": clip.get("reason")})
     audio = ""
-    if plan.get("voice"):
-        audio = os.path.join(work, "voice.m4a")
-        if not tone(audio, float(plan.get("duration_target") or 8)):
-            return _fail("audio bed failed")
-    if not concat(parts, dest, audio):
+    voice = plan.get("voice") or []
+    if voice:
+        text = " ".join(v.get("text") or "" for v in voice)
+        spoken = narrate(text, os.path.join(work, "voice.m4a"), float(plan.get("duration_target") or 8), provider=plan.get("tts_provider") or fixture_tts)
+        audio = spoken.get("path") or ""
+        if not spoken.get("ok"):
+            print("[adaptive-tts] no audio, continuing without narration")
+    plain = dest + ".plain.mp4"
+    if not concat(parts, plain, ""):
+        return _fail("concat failed")
+    caps = segments(plan)
+    final = dest
+    if caps:
+        srt = os.path.join(work, "captions.srt")
+        open(srt, "w", encoding="utf-8").write(to_srt(caps))
+        if not burn(plain, srt, final, audio):
+            print("[adaptive-render] caption burn skipped")
+            if not concat(parts, final, audio):
+                return _fail("concat failed")
+    elif not concat(parts, final, audio):
         return _fail("concat failed")
     info = probe(dest)
     expected = sum(float(c["end"]) - float(c["start"]) for c in clips)
