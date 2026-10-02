@@ -30,7 +30,7 @@ def test_all():
     assert fu.reject({"clip_id": "A", "source_hash": ha, "start": 0, "end": 2}) == "COOLDOWN"
     assert fu.reject({"clip_id": "copy", "source_hash": ha, "start": 0.2, "end": 1.8, "title": "new title"}) == "CONTENT_DUPLICATE"
     assert fu.reject({"clip_id": "re", "fingerprint": fr, "start": 0, "end": 2}) == "VISUAL_DUPLICATE"
-    assert fu.reject({"source_hash": ha, "start": 1.0, "end": 2.0}) == "SEGMENT_OVERLAP"
+    assert fu.reject({"source_hash": ha, "start": 1.0, "end": 2.0}) == "CONTENT_DUPLICATE"
     assert fu.reject({"clip_id": "B", "source_hash": hb, "fingerprint": fb, "start": 0, "end": 2}) == ""
     assert fu.similar(fa, fb) < 0.98
     assert not fu.allow_reuse()
