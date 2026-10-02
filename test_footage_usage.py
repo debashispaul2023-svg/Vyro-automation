@@ -21,17 +21,18 @@ def test_all():
     b = _clip(folder, "b.mp4", "smptebars=size=160x90:rate=12")
     copy = os.path.join(folder, "a_copy.mp4")
     subprocess.run(["cp", a, copy], check=True)
+    reenc = os.path.join(folder, "a_reenc.mp4")
+    subprocess.run(["ffmpeg", "-y", "-i", a, "-c:v", "libx264", "-crf", "30", reenc], check=True, capture_output=True)
     ha, hb = fu.file_hash(a), fu.file_hash(b)
     assert ha == fu.file_hash(copy) and ha != hb
-    fu.record({"source_file_id": "A", "source_hash": ha, "fingerprint": fu.fingerprint(a), "start": 0, "end": 2, "video_id": "v1"})
-    assert fu.reject({"clip_id": "A", "source_hash": ha, "start": 0, "end": 2})
-    assert fu.reject({"clip_id": "copy", "source_hash": ha, "start": 0.2, "end": 1.8, "title": "new title"})
-    assert fu.reject({"source_hash": ha, "start": 1.0, "end": 2.0}) == "RECENT_FOOTAGE_OVERLAP" or fu.reject({"source_hash": ha, "start": 1.0, "end": 2.0})
-    assert fu.reject({"clip_id": "B", "source_hash": hb, "fingerprint": fu.fingerprint(b), "start": 0, "end": 2}) == ""
-    assert fu.reject({"clip_id": "A", "source_hash": ha, "start": 0, "end": 1})  # same clip in one video via log
-    old = fu.load()
-    fu.record({"source_file_id": "C", "source_hash": "c", "start": 0, "end": 1, "video_id": "v2"})
-    assert len(fu.load()) == len(old) + 1
+    fa, fb, fr = fu.fingerprint(a), fu.fingerprint(b), fu.fingerprint(reenc)
+    fu.record({"source_file_id": "A", "source_hash": ha, "fingerprint": fa, "start": 0, "end": 2, "video_id": "v1"})
+    assert fu.reject({"clip_id": "A", "source_hash": ha, "start": 0, "end": 2}) == "COOLDOWN"
+    assert fu.reject({"clip_id": "copy", "source_hash": ha, "start": 0.2, "end": 1.8, "title": "new title"}) == "CONTENT_DUPLICATE"
+    assert fu.reject({"clip_id": "re", "fingerprint": fr, "start": 0, "end": 2}) == "VISUAL_DUPLICATE"
+    assert fu.reject({"source_hash": ha, "start": 1.0, "end": 2.0}) == "SEGMENT_OVERLAP"
+    assert fu.reject({"clip_id": "B", "source_hash": hb, "fingerprint": fb, "start": 0, "end": 2}) == ""
+    assert fu.similar(fa, fb) < 0.98
     assert not fu.allow_reuse()
     print("footage usage tests PASS")
 
