@@ -5,8 +5,8 @@ import argparse
 import os
 import sys
 
-from ..analyzer import probe
-from ..event_detector import event_from_name
+from ..analyzer import frame_signal, probe
+from ..event_detector import event_from_footage
 from ..hook_engine import score
 from ..roadmap import build
 from ..schemas import Shot
@@ -38,19 +38,22 @@ def _one(path: str, stats: dict) -> None:
     try:
         digest = file_hash(path)
         if already_indexed(digest):
-            print(f"[adaptive-memory] already indexed: {digest[:12]}")
+            print(f"[adaptive-memory] duplicate: {digest[:12]}")
             stats["skipped"] += 1
             return
         meta = probe(path)
+        signal = frame_signal(path, meta["duration"])
         windows = detect_shots(path) or ([(0.0, min(meta["duration"], 2.5))] if meta["duration"] > 0.4 else [])
         if not windows:
-            print(f"[adaptive-memory] no shots: {path}")
+            print(f"[adaptive-memory] failed: no shots {os.path.basename(path)}")
             stats["failed"] += 1
             return
-        shots = []
-        for start, end in windows:
-            event = event_from_name(os.path.basename(path))
-            shots.append(score(Shot(path, start, end, event, reason=event)))
+        event, supported = event_from_footage(os.path.basename(path), signal)
+        if not supported:
+            print(f"[adaptive-memory] failed: unsupported event {os.path.basename(path)}")
+            stats["failed"] += 1
+            return
+        shots = [score(Shot(path, start, end, event, reason=event, supported=True)) for start, end in windows]
         story = build(shots)
         row = memory_record(
             memory_id=digest[:12] or os.path.basename(path),
@@ -63,9 +66,10 @@ def _one(path: str, stats: dict) -> None:
             qc_passed=True,
             file_hash=digest,
             result="unknown",
+            pacing="adaptive",
         )
         if append_jsonl("footage_memory.jsonl", row):
-            print(f"[adaptive-memory] indexed {os.path.basename(path)} structure={story.structure}")
+            print(f"[adaptive-memory] indexed: {os.path.basename(path)} structure={story.structure}")
             stats["indexed"] += 1
         else:
             stats["failed"] += 1
