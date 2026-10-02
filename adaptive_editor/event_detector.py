@@ -28,25 +28,51 @@ def event_from_name(name: str) -> str:
     return best
 
 
-def event_from_footage(name: str, signal: dict | None) -> tuple[str, bool]:
-    """Frame evidence decides. Filename is logged and cannot create an event."""
+ALLOWED = {
+    "ROLL", "REWARD", "CHARACTER_REVEAL", "LUCKY_RESULT", "FAIL", "WIN", "LOSS",
+    "SURPRISE", "FAST_ACTION", "PROGRESSION", "WAITING", "STATIC", "UNKNOWN",
+}
+MIN_CONFIDENCE = 0.75
+
+
+def event_from_footage(name: str, signal: dict | None, vision: dict | None = None) -> tuple[str, bool]:
+    """Local signals are evidence only. Filename cannot create an event."""
     hint = event_from_name(name)
-    sig = signal or {}
-    evidence = {
-        "motion_score": sig.get("motion", 0.0),
-        "scene_change_score": sig.get("scene_change_score", 0.0),
-        "frame_samples": sig.get("frame_samples") or [],
-        "visual_signal": sig.get("visual_signal") or "unsampled",
-        "filename_hint": hint,
-    }
-    if not sig.get("sampled") or sig.get("static") or evidence["visual_signal"] in ("static", "single_frame", "unsampled", "motion_only"):
-        print(f"[adaptive] filename hint {hint} ignored — visual_signal={evidence['visual_signal']}")
+    events = classify_events(signal or {}, vision or {}, hint)
+    if not events:
+        print(f"[adaptive] filename hint {hint} ignored — no sufficient visual evidence")
         return "UNKNOWN", False
-    if evidence["visual_signal"] == "reveal-like transition, not identity":
-        print(f"[adaptive] reveal-like transition evidence={evidence}")
-        return "CHARACTER_REVEAL", True
-    if evidence["visual_signal"] == "scene_change":
-        print(f"[adaptive] scene change recorded, event not classified — {evidence}")
-        return "UNKNOWN", False
-    print(f"[adaptive] filename hint {hint} ignored — no classified visual event")
-    return "UNKNOWN", False
+    best = events[0]
+    print(f"[adaptive] event {best['type']} confidence={best['confidence']} evidence={best['evidence']}")
+    return best["type"], True
+
+
+def classify_events(signal: dict, vision: dict | None = None, filename_hint: str = "") -> list:
+    rows = []
+    items = (vision or {}).get("events") if isinstance(vision, dict) else None
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "UNKNOWN")
+        conf = float(item.get("confidence") or 0)
+        evidence = item.get("evidence") or []
+        if kind not in ALLOWED or kind == "UNKNOWN" or conf < MIN_CONFIDENCE or not evidence:
+            continue
+        rows.append({
+            "type": kind,
+            "start": float(item.get("start") or 0),
+            "end": float(item.get("end") or 0),
+            "confidence": conf,
+            "evidence": evidence,
+            "filename_hint": filename_hint,
+            "local": {
+                "motion": signal.get("motion"),
+                "scene_change_score": signal.get("scene_change_score"),
+                "visual_signal": signal.get("visual_signal"),
+            },
+        })
+    if rows:
+        return rows
+    if signal.get("sampled") and signal.get("static"):
+        return [{"type": "STATIC", "start": 0, "end": 0, "confidence": 0.8, "evidence": ["little visual change"], "filename_hint": filename_hint}]
+    return []
