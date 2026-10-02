@@ -8,7 +8,8 @@
     "roll anime girls",
     "steal a seed",
     "world athletics",
-    "how to fisch"
+    "how to fisch",
+    "sunshine valley"
   ],
   "joined_campaigns": [
     {
@@ -35,6 +36,16 @@
       "name_hint": "How to Fisch",
       "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
       "source_clip_url": "https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
+    },
+    {
+      "url": "https://contentrewards.com/discover/86feeffa-1373-4ade-b37d-e8356f9e35fe",
+      "name_hint": "Sunshine Valley",
+      "campaign_uuid": "86feeffa-1373-4ade-b37d-e8356f9e35fe",
+      "platform": "contentrewards",
+      "reference_doc_url": "https://docs.google.com/document/d/1SElAyAAOG7TgE2fOgAcfEJuMk7dDdzqf9F428W3tSYQ/edit?usp=sharing",
+      "discord": "https://discord.gg/jMm6EdTpZj",
+      "hold_until_campaign": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
+      "note": "Do not select until Roll Anime Girls clips are exhausted. No Drive footage folder yet."
     }
   ]
 }

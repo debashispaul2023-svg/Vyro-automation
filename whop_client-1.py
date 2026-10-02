@@ -886,10 +886,11 @@ def _looks_like_whop_chrome(text: str) -> bool:
     return False
 
 
-def check_configured_campaigns() -> Optional[WhopCampaign]:
+def check_configured_campaigns(skip_ids=None) -> Optional[WhopCampaign]:
     configured = _load_configured_campaigns()
     if not configured:
         return None
+    skip = {str(x).strip().lower() for x in (skip_ids or set()) if str(x).strip()}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -900,6 +901,13 @@ def check_configured_campaigns() -> Optional[WhopCampaign]:
             for entry in configured:
                 url = entry["url"]
                 name_hint = entry.get("name_hint", "")
+                hold = (entry.get("hold_until_campaign") or "").strip().lower()
+                if hold and hold not in skip:
+                    print(f"[whop] hold '{name_hint}' until campaign {hold} clips are exhausted")
+                    continue
+                if (entry.get("platform") or "") == "contentrewards" and not (entry.get("source_clip_url") or "").strip():
+                    print(f"[whop] '{name_hint}' queued — no Drive footage folder yet")
+                    continue
                 try:
                     _ensure_logged_in(page, url)
                     campaign = _extract_campaign_details(page, url, name_hint=name_hint)
