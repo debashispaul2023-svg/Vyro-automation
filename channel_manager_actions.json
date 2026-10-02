@@ -10,5 +10,11 @@
     "reason": "no snapshot",
     "timestamp": "2026-10-01T07:16:49.469007+00:00",
     "applied": false
+  },
+  {
+    "type": "noop",
+    "reason": "no snapshot",
+    "timestamp": "2026-10-02T07:06:15.369191+00:00",
+    "applied": false
   }
 ]
