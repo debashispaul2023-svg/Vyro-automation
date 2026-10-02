@@ -2,19 +2,26 @@
 from __future__ import annotations
 
 
-def segments(plan: dict) -> list:
+def segments(plan: dict, duration: float | None = None) -> list:
+    limit = duration if duration is not None else float(plan.get("duration_target") or 0)
     rows = []
     last_end = 0.0
     for row in plan.get("captions") or []:
-        text = wrap(" ".join(str(row.get("text") or "").split()))
+        text = wrap(" ".join(str(row.get("text") or "").replace("\n", " ").split()))
         if not text:
             continue
-        start = max(float(row.get("start") or 0), last_end)
+        start = float(row.get("start") or 0)
         end = float(row.get("end") or 0)
-        if end <= start:
+        if end <= start or start < 0:
+            continue
+        if not row.get("simultaneous"):
+            start = max(start, last_end)
+        if limit > 0:
+            end = min(end, limit)
+        if end - start < 0.3:
             continue
         rows.append({"start": round(start, 2), "end": round(end, 2), "text": text})
-        last_end = end
+        last_end = max(last_end, end)
     return rows
 
 

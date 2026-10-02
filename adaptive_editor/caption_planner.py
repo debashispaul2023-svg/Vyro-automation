@@ -13,7 +13,11 @@ def captions(steps: list) -> list:
             "end": round(t + min(dur, 1.6), 2),
             "text": text.replace("_", " "),
         })
-        t += dur
+        t = rows[-1]["end"]
     if rows:
-        rows.append({"start": round(max(0.0, t - 1.6), 2), "end": round(t, 2), "text": "Try Roll Anime Girls on Roblox"})
+        rows.append({
+            "start": round(t, 2),
+            "end": round(t + 0.8, 2),
+            "text": "Try Roll Anime Girls on Roblox",
+        })
     return rows
