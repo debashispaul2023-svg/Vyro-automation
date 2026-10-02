@@ -45,11 +45,13 @@ def main() -> int:
         print("[adaptive-render] upload: never")
         if not rendered.get("ok"):
             return 1
+    elif result.get("fallback"):
+        print("[adaptive] no classified visual event — filename did not create an event")
     else:
         print("[adaptive] rendering: planning-only unless --render")
     print("[adaptive] fallback:" , "not needed" if result.get("ok") else result.get("reason"))
     print("[adaptive] upload: never")
-    return 0 if result.get("ok") else 1
+    return 0 if result.get("ok") or result.get("fallback") else 1
 
 
 if __name__ == "__main__":

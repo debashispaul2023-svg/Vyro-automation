@@ -29,19 +29,24 @@ def event_from_name(name: str) -> str:
 
 
 def event_from_footage(name: str, signal: dict | None) -> tuple[str, bool]:
-    """Footage signal is authoritative. Filename is a weak hint and is rejected if unsupported."""
+    """Frame evidence decides. Filename is logged and cannot create an event."""
     hint = event_from_name(name)
     sig = signal or {}
-    if not sig.get("sampled") or sig.get("static"):
-        print(f"[adaptive] filename hint {hint} not trusted — footage has no supporting motion")
+    evidence = {
+        "motion_score": sig.get("motion", 0.0),
+        "scene_change_score": sig.get("scene_change_score", 0.0),
+        "frame_samples": sig.get("frame_samples") or [],
+        "visual_signal": sig.get("visual_signal") or "unsampled",
+        "filename_hint": hint,
+    }
+    if not sig.get("sampled") or sig.get("static") or evidence["visual_signal"] in ("static", "single_frame", "unsampled", "motion_only"):
+        print(f"[adaptive] filename hint {hint} ignored — visual_signal={evidence['visual_signal']}")
         return "UNKNOWN", False
-    action = {"ROLL", "SPIN", "FAST_ACTION", "FAIL"}
-    reveal = {"CHARACTER_REVEAL", "RARE_REVEAL", "LUCKY_RESULT"}
-    if hint in action and sig.get("motion", 0) >= 0.02:
-        return hint, True
-    if hint in reveal and sig.get("scene_change"):
-        return hint, True
-    if hint == "REWARD" and sig.get("motion", 0) >= 0.02:
-        return hint, True
-    print(f"[adaptive] filename hint {hint} not trusted — footage signal does not support it")
+    if evidence["visual_signal"] == "reveal-like transition, not identity":
+        print(f"[adaptive] reveal-like transition evidence={evidence}")
+        return "CHARACTER_REVEAL", True
+    if evidence["visual_signal"] == "scene_change":
+        print(f"[adaptive] scene change recorded, event not classified — {evidence}")
+        return "UNKNOWN", False
+    print(f"[adaptive] filename hint {hint} ignored — no classified visual event")
     return "UNKNOWN", False

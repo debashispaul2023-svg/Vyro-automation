@@ -66,10 +66,19 @@ _SIGNAL_CACHE: dict[str, dict] = {}
 
 
 def frame_signal(path: str, duration: float = 0.0) -> dict:
-    """Sample two frames. Motion is the only footage signal. No event is inferred here."""
+    """Sample a few frames. Filename is not read here."""
     if path in _SIGNAL_CACHE:
         return _SIGNAL_CACHE[path]
-    signal = {"motion": 0.0, "scene_change": False, "static": True, "sampled": False}
+    signal = {
+        "motion": 0.0,
+        "scene_change": False,
+        "scene_change_score": 0.0,
+        "color_shift": 0.0,
+        "static": True,
+        "sampled": False,
+        "frame_samples": [],
+        "visual_signal": "unsampled",
+    }
     if not path or not os.path.isfile(path):
         _SIGNAL_CACHE[path] = signal
         return signal
@@ -77,22 +86,45 @@ def frame_signal(path: str, duration: float = 0.0) -> dict:
         duration = probe(path)["duration"]
     times = sample_times(duration) or [0.2]
     frames = []
-    for t in times[:2]:
+    for t in times[:4]:
         raw = subprocess.run(
             ["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", path, "-frames:v", "1",
-             "-vf", "scale=32:18,format=gray", "-f", "rawvideo", "-"],
+             "-vf", "scale=16:16,format=rgb24", "-f", "rawvideo", "-"],
             capture_output=True, timeout=20,
         )
-        if raw.returncode == 0 and raw.stdout:
-            frames.append(raw.stdout[: 32 * 18])
-    if len(frames) >= 2 and len(frames[0]) == len(frames[1]) and frames[0]:
-        diff = sum(abs(a - b) for a, b in zip(frames[0], frames[1])) / len(frames[0])
-        signal["motion"] = round(diff / 255.0, 4)
-        signal["scene_change"] = signal["motion"] >= 0.08
+        if raw.returncode == 0 and len(raw.stdout) >= 16 * 16 * 3:
+            frames.append(raw.stdout[: 16 * 16 * 3])
+            signal["frame_samples"].append(t)
+    if len(frames) >= 2:
+        diffs = []
+        shifts = []
+        for a, b in zip(frames, frames[1:]):
+            diffs.append(sum(abs(x - y) for x, y in zip(a, b)) / len(a) / 255.0)
+            shifts.append(_color_shift(a, b))
+        signal["motion"] = round(sum(diffs) / len(diffs), 4)
+        signal["scene_change_score"] = round(max(diffs), 4)
+        signal["color_shift"] = round(max(shifts), 4)
+        signal["scene_change"] = signal["scene_change_score"] >= 0.18
         signal["static"] = signal["motion"] < 0.02
         signal["sampled"] = True
+        if signal["static"]:
+            signal["visual_signal"] = "static"
+        elif signal["scene_change"] and signal["color_shift"] >= 0.12:
+            signal["visual_signal"] = "reveal-like transition, not identity"
+        elif signal["scene_change"]:
+            signal["visual_signal"] = "scene_change"
+        else:
+            signal["visual_signal"] = "motion_only"
     elif frames:
         signal["sampled"] = True
-        signal["static"] = True
+        signal["visual_signal"] = "single_frame"
     _SIGNAL_CACHE[path] = signal
     return signal
+
+
+def _color_shift(a: bytes, b: bytes) -> float:
+    def mean(buf):
+        n = max(1, len(buf) // 3)
+        return [sum(buf[i::3]) / n for i in range(3)]
+    ma, mb = mean(a), mean(b)
+    return sum(abs(x - y) for x, y in zip(ma, mb)) / 3 / 255.0
