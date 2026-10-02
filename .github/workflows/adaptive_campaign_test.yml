@@ -1,0 +1,37 @@
+name: adaptive campaign footage test
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt && python -m playwright install --with-deps chromium
+      - name: one adaptive test, no upload
+        env:
+          PYTHONUNBUFFERED: "1"
+          ADAPTIVE_EDITOR_ENABLED: "1"
+          VYRO_SKIP_UPLOAD: "1"
+          WHOP_ENABLE_DISCOVER: "0"
+          CLIP_REUSE: "1"
+          WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+        run: python test_adaptive_campaign.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: campaign-adaptive-test
+          path: |
+            output/adaptive/test/campaign_adaptive_test.mp4
+            output/adaptive/test/campaign_adaptive_report.json
+            output/adaptive/test/story.json
+            output/adaptive/test/edit_plan.json
