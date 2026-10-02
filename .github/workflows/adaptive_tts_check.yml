@@ -1,0 +1,32 @@
+name: adaptive tts check
+on:
+  workflow_dispatch:
+jobs:
+  tts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: one short ElevenLabs request
+        env:
+          ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
+        run: |
+          python - << 'PY'
+          import os, subprocess
+          from pathlib import Path
+          from tts_engine import generate_voiceover
+          dest = "output/adaptive/test/real_elevenlabs.mp3"
+          Path(dest).parent.mkdir(parents=True, exist_ok=True)
+          path, words = generate_voiceover("Testing real ElevenLabs speech for the adaptive editor.", dest)
+          print("speech_file", bool(path), "words", len(words or []))
+          if not path:
+              raise SystemExit(2)
+          subprocess.run(["ffprobe","-v","error","-show_entries","stream=codec_name,sample_rate:format=duration","-of","json",path], check=False)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-elevenlabs-audio
+          path: output/adaptive/test/real_elevenlabs.mp3
