@@ -42,11 +42,18 @@ def render_plan(plan: dict, dest: str, work: str | None = None) -> dict:
         srt = os.path.join(work, "captions.srt")
         open(srt, "w", encoding="utf-8").write(to_srt(caps))
         if not burn(plain, srt, final, audio):
-            print("[adaptive-render] caption burn skipped")
+            print("[adaptive-render] caption burn failed — video kept without captions")
+            burned = False
             if not concat(parts, final, audio):
                 return _fail("concat failed")
+        else:
+            burned = True
+            print("[adaptive-render] captions burned")
     elif not concat(parts, final, audio):
         return _fail("concat failed")
+    else:
+        burned = False
+        print("[adaptive-render] no captions requested")
     info = probe(dest)
     expected = sum(float(c["end"]) - float(c["start"]) for c in clips)
     fails = []
@@ -66,6 +73,7 @@ def render_plan(plan: dict, dest: str, work: str | None = None) -> dict:
         "order": used,
         "probe": info,
         "fails": fails,
+        "captions_burned": burned,
         "upload": False,
     }
 

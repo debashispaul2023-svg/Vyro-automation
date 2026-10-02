@@ -64,7 +64,7 @@ def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
     cmd = ["ffmpeg", "-y", "-i", video]
     if audio and os.path.isfile(audio):
         cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
-    cmd += ["-vf", f"subtitles='{path}'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
+    cmd += ["-vf", f"subtitles='{path}':force_style='Fontsize=28,Outline=2,Alignment=2,MarginV=160'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=90)
         return os.path.isfile(dest) and os.path.getsize(dest) > 500
@@ -76,7 +76,7 @@ def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
 def tone(dest: str, seconds: float) -> bool:
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{max(1.0, seconds):.2f}", dest],
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", f"{max(1.0, seconds):.2f}", dest],
             check=True, capture_output=True, timeout=30,
         )
         return os.path.isfile(dest)
