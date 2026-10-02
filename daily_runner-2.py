@@ -148,7 +148,7 @@ def _save_clip_log(log: dict) -> None:
 
 
 def _clip_already_used(log: dict, campaign_id: str, clip_id: str, name: str = "") -> bool:
-    """Skip a file if this Drive id or clip name was already rendered."""
+    """Skip a file if this Drive id, name, or footage identity was already rendered."""
     reuse = (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes")
     if reuse:
         return False
@@ -156,10 +156,20 @@ def _clip_already_used(log: dict, campaign_id: str, clip_id: str, name: str = ""
     nm = (name or "").strip().lower()
     for row in log.get("clips") or []:
         if cid and (row.get("clip_id") or "").strip() == cid:
+            print(f"[footage] candidate={nm or cid} duplicate=YES rejected_reason=CLIP_ID")
             return True
         used_name = (row.get("name") or "").strip().lower()
         if nm and used_name and used_name == nm:
+            print(f"[footage] candidate={nm} duplicate=YES rejected_reason=FILENAME")
             return True
+    try:
+        import footage_usage
+        reason = footage_usage.reject({"clip_id": cid, "name": nm})
+        if reason:
+            print(f"[footage] candidate={nm or cid} duplicate=YES rejected_reason={reason}")
+            return True
+    except Exception as exc:
+        print(f"[footage] usage check skipped: {exc}")
     return False
 
 
@@ -299,6 +309,14 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
         and "youtu" not in (c.get("url") or "").lower()
     ]
     if not unused:
+        try:
+            import footage_usage
+            reuse_ok = footage_usage.allow_reuse()
+        except Exception:
+            reuse_ok = False
+        if not reuse_ok:
+            print("[footage] INSUFFICIENT_UNIQUE_FOOTAGE")
+            return []
         unused = [
             c for c in clips
             if c.get("kind") in ("drive_file", "direct")
@@ -455,6 +473,14 @@ def _next_unused_clip(campaign: Campaign, log: dict) -> dict[str, str] | None:
         if not _clip_already_used(log, campaign.campaign_id, clip["clip_id"], clip.get("name") or "")
     ]
     if not unused:
+        try:
+            import footage_usage
+            reuse_ok = footage_usage.allow_reuse()
+        except Exception:
+            reuse_ok = False
+        if not reuse_ok:
+            print("[footage] INSUFFICIENT_UNIQUE_FOOTAGE")
+            return None
         print(f"[clips] all {len(official)} Drive clips used — recycling folder (new combo).")
         unused = official
         if not unused:
@@ -1657,15 +1683,26 @@ def main() -> int:
     status = process_campaign(platform, campaign, preferred_clip=nxt)
     if status == 0:
         for piece in pack:
-            clip_log["clips"].append(
-                {
+            row = {
                     "campaign_id": campaign.campaign_id,
                     "clip_id": piece["clip_id"],
                     "name": piece.get("name", ""),
                     "url": piece.get("url", ""),
                     "kind": piece.get("kind", ""),
                 }
-            )
+            clip_log["clips"].append(row)
+            try:
+                import footage_usage
+                footage_usage.record({
+                    "source_file_id": piece["clip_id"],
+                    "source_file": piece.get("name", ""),
+                    "campaign": campaign.campaign_id,
+                    "start": 0,
+                    "end": 0,
+                })
+                print(f"[footage] selected={piece.get('name') or piece['clip_id']} duplicate=NO")
+            except Exception as exc:
+                print(f"[footage] record skipped: {exc}")
         _save_clip_log(clip_log)
         print(f"Recorded {len(pack)} merged clip(s) for campaign {campaign.campaign_id}.")
         return 0
