@@ -1505,7 +1505,16 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
     try:
         _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
         _prep_footage(SOURCE_CLIP_PATH)
-        render_short(
+        adaptive_used = False
+        if (os.environ.get("ADAPTIVE_EDITOR_ENABLED") or "0").strip() == "1":
+            try:
+                from adaptive_bridge import try_render
+                adaptive = try_render([SOURCE_CLIP_PATH], OUTPUT_PATH)
+                adaptive_used = bool(adaptive.get("ok"))
+            except Exception as exc:
+                print(f"[adaptive] failed — existing renderer fallback ({exc})")
+        if not adaptive_used:
+            render_short(
             source_path=SOURCE_CLIP_PATH,
             output_path=OUTPUT_PATH,
             req=req,
@@ -1536,6 +1545,16 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
         _pin_icon_thumbnail(OUTPUT_PATH)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
+        try:
+            from vidiq_metadata import deterministic, from_story
+            vidiq = from_story({"events": [], "hook": hook, "structure": ""}, req.mandatory_hashtags)
+            if not vidiq.get("ok"):
+                locked = deterministic(meta.title, req.mandatory_hashtags)
+                for tag in locked["tags"]:
+                    if tag.lower() not in (meta.title or "").lower() and tag.lower() not in (meta.description or "").lower():
+                        meta.description = (meta.description or "") + f"\n{tag}"
+        except Exception as exc:
+            print(f"[vidiq] unavailable ({exc})")
         print(f"[3/5] Generated metadata. Title: {meta.title}")
 
         validate_or_raise(
