@@ -7,7 +7,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 
-LOG = os.environ.get("FOOTAGE_USAGE_LOG", "footage_usage.jsonl")
+LOG = "footage_usage.jsonl"
 OVERLAP_THRESHOLD = float(os.environ.get("FOOTAGE_OVERLAP_THRESHOLD", "0.50"))
 COOLDOWN = int(os.environ.get("RECENT_FOOTAGE_COOLDOWN", "7"))
 
@@ -59,11 +59,16 @@ def overlap_ratio(a0: float, a1: float, b0: float, b1: float) -> float:
     return inter / span
 
 
+def _log() -> str:
+    return os.environ.get("FOOTAGE_USAGE_LOG") or LOG
+
+
 def load() -> list:
-    if not os.path.isfile(LOG):
+    path = _log()
+    if not os.path.isfile(path):
         return []
     rows = []
-    for line in open(LOG, encoding="utf-8"):
+    for line in open(path, encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
@@ -81,7 +86,7 @@ def record(row: dict) -> bool:
         return False
     row.setdefault("used_at", datetime.now(timezone.utc).isoformat())
     row.setdefault("usage_count", 1)
-    with open(LOG, "a", encoding="utf-8") as f:
+    with open(_log(), "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
     return True
 
