@@ -5,9 +5,9 @@ import json
 import os
 
 from . import config
-from .analyzer import probe, sample_times
+from .analyzer import frame_signal, probe, sample_times
 from .edit_planner import plan as make_plan
-from .event_detector import event_from_name
+from .event_detector import event_from_footage
 from .fallback import fallback
 from .hook_engine import score
 from .providers.chatgpt_review import ChatGPTReviewProvider
@@ -19,7 +19,10 @@ from .schemas import Shot
 from .shot_detector import detect_shots
 
 
-def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | None = None) -> dict:
+def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | None = None, local_test: bool = False) -> dict:
+    if not local_test and not config.enabled():
+        print("[adaptive] ADAPTIVE_EDITOR_ENABLED=0 — production gate closed")
+        return fallback("production gate closed")
     out = out_dir or config.output_dir()
     os.makedirs(out, exist_ok=True)
     print("[adaptive] candidates:", clips)
@@ -29,33 +32,28 @@ def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | N
     print("[adaptive] analyzing:")
     for path in clips:
         meta = probe(path)
-        print(f"  {os.path.basename(path)} {meta['duration']:.1f}s {meta['width']}x{meta['height']} audio={meta['audio']}")
+        signal = frame_signal(path, meta["duration"])
+        print(f"  {os.path.basename(path)} {meta['duration']:.1f}s motion={signal['motion']} static={signal['static']}")
         windows = detect_shots(path)
         if not windows and meta["duration"] > 0.5:
             windows = [(0.0, min(meta["duration"], 2.5))]
+        event, supported = event_from_footage(os.path.basename(path), signal)
         for start, end in windows:
-            shot = Shot(
-                clip=path,
-                start=start,
-                end=end,
-                event=event_from_name(os.path.basename(path)),
-                reason=event_from_name(os.path.basename(path)),
-            )
+            shot = Shot(clip=path, start=start, end=end, event=event, reason=event, supported=supported)
             shots.append(score(shot))
         print(f"  sample times {sample_times(meta['duration'])}")
-    if not shots:
-        return fallback("analysis failed")
+    supported = [s for s in shots if s.supported and s.event != "UNKNOWN"]
+    if not supported:
+        print("[adaptive] no supported footage events")
+        return fallback("analysis failed — filename hints not supported by frames")
     print("[adaptive] detected events:")
-    for s in shots:
+    for s in supported:
         print(f"  {os.path.basename(s.clip)} {s.start}-{s.end} {s.event} hook={s.hook_score:.2f}")
-    review = _review(shots)
-    advice = _memory(shots)
-    story = build(shots, history or [])
-    if advice.get("selected") and _compatible(advice["selected"], shots):
-        story.structure = advice["selected"]
-        print(f"[adaptive-memory] final roadmap: {story.structure}")
-    else:
-        print(f"[adaptive-memory] final roadmap: {story.structure}")
+    review = _review(supported)
+    advice = _memory(supported)
+    pattern = advice.get("selected") if advice.get("ok") else None
+    story = build(supported, history or [], pattern_id=pattern)
+    print(f"[adaptive-memory] final roadmap: {story.structure}")
     print(f"[adaptive] strongest hook: {story.hook}")
     print(f"[adaptive] story structure: {story.structure}")
     print(f"[adaptive] roadmap: {story.roadmap}")
@@ -66,7 +64,7 @@ def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | N
     _write(out, "story.json", story.to_dict())
     _write(out, "edit_plan.json", edit)
     _write(out, "qc_report.json", report)
-    _save(shots, story, report)
+    _save(supported, story, report)
     print("[adaptive] script generated from actual footage")
     return {"ok": report["ok"], "story": story.to_dict(), "edit_plan": edit, "qc": report, "out": out, "memory": advice}
 
@@ -107,8 +105,9 @@ def _review(shots: list) -> dict:
     if not gem.get("ok"):
         print("[adaptive] Gemini unavailable")
     chat = ChatGPTReviewProvider().analyze(shots)
-    if not chat.get("ok"):
-        print("[adaptive] ChatGPT review skipped")
+    if not chat.get("ok") or not chat.get("structured"):
+        print("[adaptive] ChatGPT review ignored — local roadmap kept")
+        chat = {"ok": False, "provider": "chatgpt", "ignored": True}
     return {"local": local, "gemini": gem, "chatgpt": chat}
 
 

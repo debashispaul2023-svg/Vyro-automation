@@ -7,11 +7,13 @@
       "optional_events": ["RARE_REVEAL", "REWARD"],
       "sequence": ["hook_tease", "roll", "reveal"],
       "recommended_pacing": "fast",
-      "usage_count": 12,
-      "success_count": 9,
-      "failure_count": 3,
-      "success_rate": 0.75,
-      "notes": "seed prior, not measured from this channel"
+      "usage_count": 0,
+      "success_count": 0,
+      "failure_count": 0,
+      "weak_count": 0,
+      "success_rate": null,
+      "result": "unknown",
+      "notes": "seed structure only, no measured performance"
     },
     {
       "pattern_id": "generic_roll",
@@ -19,11 +21,13 @@
       "optional_events": [],
       "sequence": ["roll"],
       "recommended_pacing": "medium",
-      "usage_count": 10,
-      "success_count": 2,
-      "failure_count": 8,
-      "success_rate": 0.2,
-      "notes": "seed prior, weak reference"
+      "usage_count": 0,
+      "success_count": 0,
+      "failure_count": 0,
+      "weak_count": 0,
+      "success_rate": null,
+      "result": "unknown",
+      "notes": "seed structure only, no measured performance"
     },
     {
       "pattern_id": "fail_attempt",
@@ -31,11 +35,13 @@
       "optional_events": ["ROLL"],
       "sequence": ["attempt", "fail"],
       "recommended_pacing": "medium",
-      "usage_count": 4,
-      "success_count": 2,
-      "failure_count": 2,
-      "success_rate": 0.5,
-      "notes": "seed prior"
+      "usage_count": 0,
+      "success_count": 0,
+      "failure_count": 0,
+      "weak_count": 0,
+      "success_rate": null,
+      "result": "unknown",
+      "notes": "seed structure only, no measured performance"
     }
   ]
 }

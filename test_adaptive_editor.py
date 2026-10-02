@@ -18,7 +18,7 @@ def _make_clips(folder: str) -> list[str]:
     for name, color in specs:
         dest = os.path.join(folder, name)
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=640x360:d=3", "-r", "24", dest],
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=24", "-t", "3", dest],
             check=True, capture_output=True, timeout=30,
         )
         paths.append(dest)
@@ -33,7 +33,7 @@ def main() -> int:
     out = os.environ.get("ADAPTIVE_OUTPUT_DIR") or "output/adaptive_test"
     clips = args.clips or _make_clips(os.path.join(out, "clips"))
     from adaptive_editor.engine import run_adaptive
-    result = run_adaptive(clips, out_dir=out)
+    result = run_adaptive(clips, out_dir=out, local_test=True)
     if args.no_render:
         print("[adaptive] rendering skipped")
     else:

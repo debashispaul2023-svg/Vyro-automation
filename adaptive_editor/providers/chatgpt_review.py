@@ -10,6 +10,19 @@ from __future__ import annotations
 import os
 
 
+REQUIRED = ("hook", "structure", "pacing", "issues", "suggestions")
+
+
+def accept_review(payload) -> dict:
+    if not isinstance(payload, dict) or any(key not in payload for key in REQUIRED):
+        print("[chatgpt-review] malformed response — ignored")
+        return {"ok": False, "provider": "chatgpt", "structured": False, "reason": "malformed"}
+    if not isinstance(payload.get("issues"), list) or not isinstance(payload.get("suggestions"), list):
+        print("[chatgpt-review] malformed response — ignored")
+        return {"ok": False, "provider": "chatgpt", "structured": False, "reason": "malformed"}
+    return {"ok": True, "provider": "chatgpt", "structured": True, "review": payload}
+
+
 class ChatGPTReviewProvider:
     name = "chatgpt"
 
@@ -38,12 +51,8 @@ class ChatGPTReviewProvider:
                 title = page.title()
                 browser.close()
             print(f"[adaptive] ChatGPT session opened: {title}")
-            return {
-                "ok": True,
-                "provider": self.name,
-                "notes": "session opened; frame upload is optional and not required",
-                "confidence": 0.4,
-            }
+            print("[chatgpt-review] no structured review — ignored")
+            return {"ok": False, "provider": self.name, "structured": False, "reason": "no structured review"}
         except Exception as exc:
             print(f"[adaptive] ChatGPT review skipped ({exc})")
             return {"ok": False, "provider": self.name, "reason": str(exc)[:180]}

@@ -5,20 +5,26 @@ from .pacing import STRUCTURES, choose, recent_too_similar
 from .schemas import StoryDoc
 
 
-def build(shots: list, history: list | None = None) -> StoryDoc:
+def build(shots: list, history: list | None = None, pattern_id: str | None = None) -> StoryDoc:
     history = history or []
-    if not shots:
-        return StoryDoc("", "none", {}, [], 0, 0, "none", "", ["no footage"])
-    structure = choose(shots)
-    hook = max(shots, key=lambda s: (s.hook_score - s.static_penalty, s.payoff_score))
+    usable = [s for s in shots if s.event not in ("UNKNOWN", "LOW_INFORMATION") and s.supported]
+    if not usable:
+        return StoryDoc("", "none", {}, [], 0, 0, "none", "", ["no supported footage events"])
+    structure = choose(usable)
+    if pattern_id and _can(pattern_id, usable):
+        structure = pattern_id
+        print(f"[adaptive] roadmap built from memory pattern {pattern_id}")
+    elif pattern_id:
+        print(f"[adaptive] memory pattern {pattern_id} rejected — footage missing required events")
+    hook = max(usable, key=lambda s: (s.hook_score - s.static_penalty, s.payoff_score))
     signature = {"hook_type": hook.event.lower(), "structure": structure, "pacing": "adaptive"}
     if recent_too_similar(signature, history):
         alts = [s for s in STRUCTURES if s != structure]
         for alt in alts:
-            if alt == "strongest_visual" or _can(alt, shots):
+            if _can(alt, usable):
                 structure = alt
                 break
-    steps = _steps(structure, shots, hook)
+    steps = _steps(structure, usable, hook)
     dur = round(sum(s["end"] - s["start"] for s in steps), 2)
     concept = hook.event.replace("_", " ").lower()
     return StoryDoc(
@@ -35,10 +41,12 @@ def build(shots: list, history: list | None = None) -> StoryDoc:
 
 def _can(structure: str, shots: list) -> bool:
     events = {s.event for s in shots}
-    if structure == "tease_roll_reveal":
+    if structure in ("tease_roll_reveal",):
         return bool(events & {"ROLL", "SPIN"}) and bool(events & {"RARE_REVEAL", "CHARACTER_REVEAL"})
-    if structure == "attempt_fail_payoff":
+    if structure in ("attempt_fail_payoff", "fail_attempt"):
         return "FAIL" in events
+    if structure == "generic_roll":
+        return "ROLL" in events
     return True
 
 
@@ -46,8 +54,9 @@ def _steps(structure: str, shots: list, hook) -> list:
     used = []
 
     def take(role: str, prefer: set, fallback):
-        pool = [s for s in shots if s.event in prefer and s not in used] or [s for s in shots if s not in used]
+        pool = [s for s in shots if s.event in prefer and s not in used]
         if not pool:
+            print(f"[adaptive] skip {role} — no footage event in {sorted(prefer)}")
             return
         pick = fallback if fallback in pool else pool[0]
         used.append(pick)

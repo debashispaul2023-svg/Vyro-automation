@@ -43,6 +43,10 @@ def save_experience(shots: list, story, qc_report: dict, source: str = "adaptive
             }
             for s in shots[:8]
         ]
+        digest = file_hash(shots[0].clip) if shots else ""
+        if digest and already_indexed(digest):
+            print(f"[adaptive-memory] already indexed: {digest[:12]}")
+            return False
         row = memory_record(
             memory_id=f"{source}_{len(read_jsonl('footage_memory.jsonl')) + 1}",
             source=source,
@@ -52,7 +56,7 @@ def save_experience(shots: list, story, qc_report: dict, source: str = "adaptive
             structure=story.structure,
             duration=story.estimated_duration,
             qc_passed=bool((qc_report or {}).get("ok")),
-            file_hash="",
+            file_hash=digest,
             result="unknown",
         )
         ok = append_jsonl("footage_memory.jsonl", row)

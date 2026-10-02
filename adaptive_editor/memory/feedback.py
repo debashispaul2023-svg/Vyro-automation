@@ -30,7 +30,7 @@ def record_feedback(video_id: str, structure: str, result: str, performance: dic
         "result": result,
     }
     append_jsonl("performance_memory.jsonl", row)
-    if result in ("successful", "failed"):
+    if result in ("successful", "failed", "weak"):
         _bump(structure, result)
     print(f"[adaptive-memory] feedback {video_id} result={result}")
     return row
@@ -44,8 +44,13 @@ def _bump(structure: str, result: str) -> None:
         pattern["usage_count"] = int(pattern.get("usage_count") or 0) + 1
         if result == "successful":
             pattern["success_count"] = int(pattern.get("success_count") or 0) + 1
+            pattern["result"] = "successful"
+        elif result == "weak":
+            pattern["weak_count"] = int(pattern.get("weak_count") or 0) + 1
+            pattern["result"] = "weak"
         else:
             pattern["failure_count"] = int(pattern.get("failure_count") or 0) + 1
+            pattern["result"] = "failed"
         usage = max(1, int(pattern["usage_count"]))
         pattern["success_rate"] = round(int(pattern.get("success_count") or 0) / usage, 2)
     save_patterns(patterns)
