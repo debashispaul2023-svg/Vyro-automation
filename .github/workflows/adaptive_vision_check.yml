@@ -1,0 +1,58 @@
+name: adaptive vision check
+on:
+  workflow_dispatch:
+jobs:
+  vision:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install google-generativeai
+      - name: vision json on real frames
+        env:
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+        run: |
+          python - << 'PY'
+          import json, os
+          from pathlib import Path
+          import google.generativeai as genai
+          keys = [k.strip() for k in os.environ.get("GEMINI_API_KEYS","").split(",") if k.strip()]
+          if not keys:
+              raise SystemExit("no gemini key in env")
+          prompt = (
+            "These frames are ordered samples from one gameplay video. "
+            "Return JSON only: {\"events\":[{\"type\":\"ROLL|REWARD|CHARACTER_REVEAL|LUCKY_RESULT|FAIL|WIN|LOSS|SURPRISE|FAST_ACTION|PROGRESSION|WAITING|STATIC|UNKNOWN\",\"start\":0,\"end\":0,\"confidence\":0.0,\"evidence\":[\"...\"]}]}. "
+            "Do not guess. If evidence is insufficient use UNKNOWN. Do not use any filename. Identity claims are not allowed."
+          )
+          out = {}
+          root = Path("adaptive_editor/tests/frames")
+          for clip in ("rolling","money","favorite"):
+              images = []
+              for t in (1,8,14):
+                  images.append({"mime_type":"image/jpeg","data":(root/f"{clip}_{t}.jpg").read_bytes()})
+              text = ""
+              err = ""
+              for model_name in ("gemini-3.8-flash","gemini-3.5-flash","gemini-3.5-flash-lite"):
+                  for key in keys[:4]:
+                      try:
+                          genai.configure(api_key=key)
+                          model = genai.GenerativeModel(model_name)
+                          resp = model.generate_content([prompt, *images], generation_config={"response_mime_type":"application/json","temperature":0.1})
+                          text = resp.text or ""
+                          if text:
+                              break
+                      except Exception as exc:
+                          err = str(exc)[:180]
+                  if text:
+                      break
+              out[clip] = {"raw": text[:1200], "error": err}
+              print(clip, "json", bool(text), "err", bool(err))
+          Path("output").mkdir(exist_ok=True)
+          Path("output/vision_events.json").write_text(json.dumps(out), encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vision-events
+          path: output/vision_events.json
