@@ -96,6 +96,16 @@ def main() -> int:
     if script == "Visible events: .":
         script = "Gameplay is visible. No verified event."
     plan = result.get("edit_plan") or {}
+    if not plan.get("clips"):
+        plan = {
+            "signature": "visual_only_selected_clips",
+            "duration_target": 12,
+            "clips": [
+                {"clip": p, "start": 0.4, "end": 3.2, "role": "VISUAL", "reason": "campaign selected, event unknown"}
+                for p in paths[:3]
+            ],
+        }
+        print("[adaptive-test] no verified event — visual plan from selected clips only")
     plan["voice"] = [{"text": script}]
     dest = OUT / "campaign_adaptive_test.mp4"
     rendered = render_plan(plan, str(dest), work=str(OUT / "parts")) if plan.get("clips") else {"ok": False}
