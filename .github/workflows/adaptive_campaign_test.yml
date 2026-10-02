@@ -10,7 +10,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt && python -m playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core libass9 && pip install -r requirements.txt && python -m playwright install --with-deps chromium
       - name: one adaptive test, no upload
         env:
           PYTHONUNBUFFERED: "1"

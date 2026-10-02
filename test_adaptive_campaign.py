@@ -92,16 +92,14 @@ def main() -> int:
     result = run_adaptive(paths, out_dir=str(OUT), local_test=True)
     story = result.get("story") or {}
     events = [s.get("event") for s in (story.get("roadmap") or [])]
-    script = "Visible events: " + ", ".join(e for e in events if e and e != "UNKNOWN") + "."
-    if script == "Visible events: .":
-        script = "Gameplay is visible. No verified event."
+    script = "Gameplay is visible. No verified roll, reward, or reveal in these selected clips. Watch the motion."
     plan = result.get("edit_plan") or {}
     if not plan.get("clips"):
         plan = {
             "signature": "visual_only_selected_clips",
             "duration_target": 12,
             "clips": [
-                {"clip": p, "start": 0.4, "end": 3.2, "role": "VISUAL", "reason": "campaign selected, event unknown"}
+                {"clip": p, "start": 0.4, "end": 2.2, "role": "VISUAL", "reason": "campaign selected, event unknown"}
                 for p in paths[:3]
             ],
         }
