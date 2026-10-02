@@ -15,11 +15,13 @@ class ChatGPTReviewProvider:
 
     def analyze(self, shots: list, frames: list | None = None) -> dict:
         if (os.environ.get("CHATGPT_REVIEW") or "0").strip() != "1":
-            print("[adaptive] ChatGPT review skipped")
+            print("[chatgpt-review] skipping optional review")
             return {"ok": False, "provider": self.name, "reason": "CHATGPT_REVIEW=0"}
         cookie = (os.environ.get("CHATGPT_COOKIE_HEADER") or os.environ.get("CHATGPT_SESSION_COOKIE") or "").strip()
         if not cookie:
-            print("[adaptive] ChatGPT review skipped — no session cookie")
+            print("[chatgpt-review] cookie unavailable")
+            print("[chatgpt-review] skipping optional review")
+            print("[adaptive] continuing with local analyzer")
             return {"ok": False, "provider": self.name, "reason": "no cookie"}
         try:
             from playwright.sync_api import sync_playwright

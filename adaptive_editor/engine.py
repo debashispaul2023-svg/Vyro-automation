@@ -49,7 +49,13 @@ def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | N
     for s in shots:
         print(f"  {os.path.basename(s.clip)} {s.start}-{s.end} {s.event} hook={s.hook_score:.2f}")
     review = _review(shots)
+    advice = _memory(shots)
     story = build(shots, history or [])
+    if advice.get("selected") and _compatible(advice["selected"], shots):
+        story.structure = advice["selected"]
+        print(f"[adaptive-memory] final roadmap: {story.structure}")
+    else:
+        print(f"[adaptive-memory] final roadmap: {story.structure}")
     print(f"[adaptive] strongest hook: {story.hook}")
     print(f"[adaptive] story structure: {story.structure}")
     print(f"[adaptive] roadmap: {story.roadmap}")
@@ -60,7 +66,38 @@ def run_adaptive(clips: list[str], out_dir: str | None = None, history: list | N
     _write(out, "story.json", story.to_dict())
     _write(out, "edit_plan.json", edit)
     _write(out, "qc_report.json", report)
-    return {"ok": report["ok"], "story": story.to_dict(), "edit_plan": edit, "qc": report, "out": out}
+    _save(shots, story, report)
+    print("[adaptive] script generated from actual footage")
+    return {"ok": report["ok"], "story": story.to_dict(), "edit_plan": edit, "qc": report, "out": out, "memory": advice}
+
+
+def _memory(shots: list) -> dict:
+    try:
+        from .memory.retrieval import advise
+        return advise(shots)
+    except Exception as exc:
+        print(f"[adaptive-memory] retrieval failed: {exc}")
+        print("[adaptive-memory] continuing with fresh footage analysis")
+        return {"ok": False, "selected": ""}
+
+
+def _compatible(pattern_id: str, shots: list) -> bool:
+    events = {s.event for s in shots}
+    if pattern_id == "tease_roll_reveal":
+        return "ROLL" in events and ("CHARACTER_REVEAL" in events or "RARE_REVEAL" in events)
+    if pattern_id == "fail_attempt":
+        return "FAIL" in events
+    if pattern_id == "generic_roll":
+        return "ROLL" in events
+    return False
+
+
+def _save(shots: list, story, report: dict) -> None:
+    try:
+        from .memory.footage_memory import save_experience
+        save_experience(shots, story, report)
+    except Exception as exc:
+        print(f"[adaptive-memory] save failed: {exc}")
 
 
 def _review(shots: list) -> dict:
