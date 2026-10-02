@@ -28,6 +28,7 @@ def _make_clips(folder: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--render", action="store_true")
     parser.add_argument("--clips", nargs="*", default=[])
     args = parser.parse_args()
     out = os.environ.get("ADAPTIVE_OUTPUT_DIR") or "output/adaptive_test"
@@ -36,8 +37,16 @@ def main() -> int:
     result = run_adaptive(clips, out_dir=out, local_test=True)
     if args.no_render:
         print("[adaptive] rendering skipped")
+    elif args.render and result.get("ok"):
+        from adaptive_editor.render.renderer import render_plan
+        video = os.path.join(out, "final.mp4")
+        rendered = render_plan(result["edit_plan"], video, os.path.join(out, "parts"))
+        print(f"[adaptive-render] path: {rendered.get('path')}")
+        print("[adaptive-render] upload: never")
+        if not rendered.get("ok"):
+            return 1
     else:
-        print("[adaptive] rendering: planning-only in v1 test (no upload)")
+        print("[adaptive] rendering: planning-only unless --render")
     print("[adaptive] fallback:" , "not needed" if result.get("ok") else result.get("reason"))
     print("[adaptive] upload: never")
     return 0 if result.get("ok") else 1
