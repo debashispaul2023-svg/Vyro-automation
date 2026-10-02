@@ -10,15 +10,13 @@ from typing import Optional
 
 import google.generativeai as genai
 
-# 3.8 first. Free-tier 429 is common; 2.5-flash is retired (404). 3.5 is the fallback.
-MODEL_CANDIDATES = (
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-)
-MODEL_NAME = MODEL_CANDIDATES[0]
+import gemini_runtime
+
+# 3.8 stays configured. Quota quarantines it for the run. Fallback is 3.6 then 3.5.
+MODEL_CANDIDATES = gemini_runtime.MODELS
+MODEL_NAME = "gemini-3.6-flash"
 GEMINI_TIMEOUT_SEC = 20
-_DEAD_MODELS: set[str] = set()
+_DEAD_MODELS = gemini_runtime.RUNTIME.quarantined
 
 
 class AIBrainError(Exception):
@@ -155,9 +153,12 @@ def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
         raise AIBrainError("GEMINI_API_KEY / GEMINI_API_KEYS not set.")
     last_exc: Exception | None = None
     text = ""
-    for model_name in MODEL_CANDIDATES:
-        if model_name in _DEAD_MODELS:
-            continue
+    rt = gemini_runtime.RUNTIME
+    for _ in range(len(gemini_runtime.MODELS)):
+        model_name = rt.choose_model("metadata")
+        if not model_name:
+            break
+        rt.note_attempt(model_name)
         for i, key in enumerate(keys, start=1):
             try:
                 model = _model(key, model_name)
@@ -171,14 +172,25 @@ def _call_json(prompt: str, max_output_tokens: int = 2048) -> dict:
                     request_options={"timeout": GEMINI_TIMEOUT_SEC},
                 )
                 text = response.text
+                rt.mark_success(model_name)
                 print(f"[gemini] ok key #{i} model={model_name}")
                 break
             except Exception as exc:
                 last_exc = exc
+                kind = rt.classify(exc)
                 print(f"[gemini] key #{i}/{len(keys)} {model_name} failed: {str(exc)[:160]}")
-                _mark_dead(model_name, exc)
-                if model_name in _DEAD_MODELS:
+                if kind == "QUOTA_EXHAUSTED":
+                    rt.quota_errors += 1
+                    rt.quarantine(model_name, kind)
                     break
+                if kind == "TRANSIENT_ERROR":
+                    rt.transient[model_name] = rt.transient.get(model_name, 0) + 1
+                    rt.retries += 1
+                    if rt.transient[model_name] > 2:
+                        rt.quarantine(model_name, kind)
+                    break
+                rt.mark_failure(model_name, kind)
+                break
         if text:
             break
     if not text:
@@ -269,9 +281,14 @@ def ai_generate_metadata(hook: str, summary: str, mandatory_hashtags: list[str],
         if link not in description:
             description += f"\n{link}"
     title = data.get("title", "") or hook
-    for tag in mandatory_hashtags:
-        if tag.lower() not in title.lower():
-            title += f" {tag}"
+    if "roll anime" in (hook + " " + title).lower() and "roll anime girls" not in title.lower():
+        title = f"Roll Anime Girls {title}".strip()
+    locked = ["#shorts", "#roblox"]
+    for tag in locked + list(mandatory_hashtags or []):
+        t = tag if str(tag).startswith("#") else f"#{tag}"
+        if t.lower() not in title.lower():
+            title = (title[: max(0, 99 - len(t) - 1)].rstrip() + " " + t).strip()
+    title = title[:100].rstrip()
     return AIMetadata(
         title=title.strip(),
         description=description.strip(),

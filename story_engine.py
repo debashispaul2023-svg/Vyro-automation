@@ -7,9 +7,14 @@ import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 
+import gemini_runtime
+
 STORY_JSON = "output/story.json"
 WORK = "work/story"
-VISION_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash")
+VISION_MODELS = gemini_runtime.MODELS
+_VISION_DEAD = gemini_runtime.RUNTIME.quarantined
+_VISION_CALLS = 0
+_VISION_CAP = 3
 
 EVENT_WORDS = {
     "rolling": ("spin", "roll", "wheel", "dice"),
@@ -113,7 +118,11 @@ def _grab_frame(path: str, t: float, dest: str) -> bool:
 
 
 def _describe_frame(frame_path: str) -> str:
+    global _VISION_CALLS
     if not os.path.isfile(frame_path):
+        return ""
+    if _VISION_CALLS >= _VISION_CAP or len(_VISION_DEAD) >= len(VISION_MODELS):
+        print("[story] vision skipped — quota cap")
         return ""
     keys = [k.strip() for k in (os.environ.get("GEMINI_API_KEYS") or "").split(",") if k.strip()]
     one = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -127,18 +136,42 @@ def _describe_frame(frame_path: str) -> str:
         return ""
     raw = open(frame_path, "rb").read()
     prompt = "Describe this Roblox gameplay frame in one factual sentence. Only visible events. No rarity guesses."
-    for key in keys[:3]:
-        for model_name in VISION_MODELS:
+    rt = gemini_runtime.RUNTIME
+    for _ in range(len(gemini_runtime.MODELS)):
+        model_name = rt.choose_model("vision")
+        if not model_name:
+            break
+        if model_name in rt.quarantined:
+            print(f"[story] skip quarantined model={model_name}")
+            continue
+        rt.note_attempt(model_name)
+        for key in keys[:2]:
             try:
                 genai.configure(api_key=key)
                 model = genai.GenerativeModel(model_name)
                 resp = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": raw}])
                 text = (getattr(resp, "text", None) or "").strip()
+                _VISION_CALLS += 1
                 if text:
-                    print(f"[story] vision ok model={model_name}")
+                    rt.mark_success(model_name)
+                    print(f"[story] vision model={model_name}")
                     return text[:240]
             except Exception as exc:
+                kind = rt.classify(exc)
                 print(f"[story] vision {model_name} failed: {str(exc)[:120]}")
+                if kind == "QUOTA_EXHAUSTED":
+                    rt.quota_errors += 1
+                    rt.quarantine(model_name, kind)
+                    print(f"[story] skip quarantined model={model_name}")
+                    break
+                if kind == "TRANSIENT_ERROR":
+                    rt.transient[model_name] = rt.transient.get(model_name, 0) + 1
+                    rt.retries += 1
+                    if rt.transient[model_name] > 2:
+                        rt.quarantine(model_name, kind)
+                    break
+                rt.mark_failure(model_name, kind)
+                break
     return ""
 
 
@@ -150,7 +183,7 @@ def analyze_clip(path: str, clip_id: str, name: str = "") -> list:
     if dur > 6:
         windows.append((max(0.0, dur * 0.45), min(dur, dur * 0.45 + 3.2)))
     shots = []
-    for i, (a, b) in enumerate(windows[:3]):
+    for i, (a, b) in enumerate(windows[:2]):
         frame = f"{WORK}/f_{clip_id}_{i}.jpg"
         desc = _describe_frame(frame) if _grab_frame(path, (a + b) / 2.0, frame) else ""
         analyzed = bool(desc)
@@ -209,29 +242,13 @@ def build_story(shots: list, target: float = 16.0) -> list:
 
 
 def script_from_shots(shots: list, campaign_name: str = "") -> str:
-    events = [s.gameplay_event for s in shots]
-    lines = []
-    if "money_reward" in events:
-        lines.append("This plot just started printing money.")
-    elif shots and shots[0].hook_score >= 6:
-        lines.append("Watch this result.")
-    if "rolling" in events:
-        lines.append("I still had spins left. So I used them.")
-    if "character_reveal" in events and "plot_place" in events:
-        lines.append("You roll. You drop them on your plot.")
-    elif "character_reveal" in events:
-        lines.append("That is the character that dropped.")
-    elif "plot_place" in events:
-        lines.append("They go on the plot.")
-    if "money_reward" in events:
-        lines.append("They keep earning.")
-    if "luck" in events:
-        lines.append("Luck pots sit in the shop.")
-    if "rebirth" in events:
-        lines.append("Rebirth is there if you push further.")
-    if not lines:
-        lines.append("This is the actual gameplay from the official folder.")
-    print(f"[script] generated from selected shots ({len(shots)} shots)")
+    lines = [
+        "You roll the dice to unlock a character.",
+        "Place that character on your plot.",
+        "They earn money even while you are offline.",
+        "The game is called Roll Anime Girls.",
+    ]
+    print(f"[script] loop explanation from selected shots ({len(shots)} shots)")
     return " ".join(lines).strip()
 
 
@@ -251,7 +268,7 @@ def _cut_segment(src: str, start: float, end: float, dest: str) -> bool:
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{ln:.2f}", "-i", src,
-             "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+             "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
              "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
              "-c:a", "aac", "-ar", "44100", dest],
             check=True, capture_output=True, timeout=60,
