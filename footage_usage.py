@@ -122,25 +122,20 @@ def reject(candidate: dict, rows: list | None = None) -> str:
     finger = candidate.get("fingerprint") or ""
     start = float(candidate.get("start") or 0)
     end = float(candidate.get("end") or 0)
-    recent = rows[-COOLDOWN:]
-    for row in recent:
-        if cid and cid == (row.get("source_file_id") or row.get("clip_id") or ""):
-            print(f"[footage] rejected={cid} reason=COOLDOWN")
-            return "COOLDOWN"
+    for row in rows:
         if digest and digest == row.get("source_hash"):
             ratio = overlap_ratio(start, end or start + 1, float(row.get("start") or 0), float(row.get("end") or 0))
             if end > start and 0 < ratio < 0.99 and ratio >= OVERLAP_THRESHOLD:
                 print(f"[footage] rejected={cid or digest[:12]} reason=SEGMENT_OVERLAP")
                 return "SEGMENT_OVERLAP"
-            if end <= start or ratio >= OVERLAP_THRESHOLD or float(row.get("end") or 0) <= float(row.get("start") or 0):
-                print(f"[footage] rejected={cid or digest[:12]} reason=CONTENT_DUPLICATE")
-                return "CONTENT_DUPLICATE"
+            print(f"[footage] rejected={cid or digest[:12]} reason=CONTENT_DUPLICATE")
+            return "CONTENT_DUPLICATE"
         if finger and similar(finger, row.get("fingerprint") or "") >= 0.98:
             print(f"[footage] rejected={cid or 'fingerprint'} reason=VISUAL_DUPLICATE")
             return "VISUAL_DUPLICATE"
-        if digest and digest == row.get("source_hash") and end > start:
-            if overlap_ratio(start, end, float(row.get("start") or 0), float(row.get("end") or 0)) >= OVERLAP_THRESHOLD:
-                print(f"[footage] rejected={cid or digest[:12]} reason=SEGMENT_OVERLAP")
-                return "SEGMENT_OVERLAP"
+    for row in rows[-COOLDOWN:]:
+        if cid and cid == (row.get("source_file_id") or row.get("clip_id") or ""):
+            print(f"[footage] rejected={cid} reason=COOLDOWN")
+            return "COOLDOWN"
     print("[footage] selected=YES reason=UNIQUE_COMPATIBLE_FOOTAGE")
     return ""
