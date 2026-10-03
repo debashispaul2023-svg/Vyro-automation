@@ -29,9 +29,9 @@ EVENT_WORDS = {
 }
 COMPAT = {
     "rolling": {"character_reveal", "ui_result", "plot_place", "money_reward"},
-    "character_reveal": {"plot_place", "money_reward", "luck", "rolling"},
-    "plot_place": {"money_reward", "luck", "rebirth", "character_reveal"},
-    "money_reward": {"plot_place", "luck", "rebirth", "rolling"},
+    "character_reveal": {"plot_place", "money_reward", "rolling"},
+    "plot_place": {"money_reward", "character_reveal", "rolling"},
+    "money_reward": {"plot_place", "character_reveal", "rolling"},
     "luck": {"rolling", "character_reveal", "money_reward"},
     "rebirth": {"money_reward", "plot_place"},
     "ui_result": {"character_reveal", "money_reward", "plot_place"},
@@ -90,8 +90,8 @@ def _scores(event: str, desc: str, duration: float) -> dict:
         action += 3; story += 2
     if event == "plot_place":
         story += 3; payoff += 2
-    if event in ("luck", "rebirth"):
-        story += 1; action += 1
+    if event in ("luck", "rebirth", "running"):
+        story -= 4; hook -= 3
     if event == "menu":
         hook -= 2; story -= 1
     if duration < 0.6:
@@ -224,9 +224,15 @@ def build_story(shots: list, target: float = 16.0) -> list:
     used = {(hook.path, round(hook.start, 1))}
     remain = [s for s in shots if (s.path, round(s.start, 1)) not in used]
     roles = ["SETUP", "ACTION", "RESULT", "PAYOFF"]
+    story_events = {"rolling", "character_reveal", "plot_place", "money_reward", "ui_result"}
     while remain and sum(s.duration for s in picked) < target - 2.2:
-        nxt = max(remain, key=lambda s: _compat(picked[-1], s) + s.story_score + 0.4 * s.payoff_score)
-        if _compat(picked[-1], nxt) < 0.5 and len(picked) > 1:
+        story_left = [s for s in remain if s.gameplay_event in story_events or s.characters_visible]
+        pool = story_left or remain
+        nxt = max(pool, key=lambda s: _compat(picked[-1], s) + s.story_score + 0.4 * s.payoff_score)
+        if nxt.gameplay_event in ("luck", "running", "menu") and story_left:
+            remain = [s for s in remain if s is not nxt]
+            continue
+        if _compat(picked[-1], nxt) < 0.5 and len(picked) > 1 and story_left:
             remain = [s for s in remain if s is not nxt]
             continue
         nxt.role = roles[min(len(picked) - 1, len(roles) - 1)]
