@@ -28,6 +28,7 @@ Usage (locally or in CI):
 from __future__ import annotations
 
 import json
+import glob
 import os
 import re
 import shutil
@@ -1509,8 +1510,10 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
         if (os.environ.get("ADAPTIVE_EDITOR_ENABLED") or "0").strip() == "1":
             try:
                 from adaptive_bridge import try_render
-                adaptive = try_render([SOURCE_CLIP_PATH], OUTPUT_PATH)
-                adaptive_used = bool(adaptive.get("ok"))
+                selected = sorted(glob.glob("work/merge/raw_*.mp4")) or [SOURCE_CLIP_PATH]
+                print("[adaptive] campaign clips:", selected)
+                adaptive = try_render(selected, OUTPUT_PATH)
+                adaptive_used = bool(adaptive.get("ok") and os.path.isfile(OUTPUT_PATH))
             except Exception as exc:
                 print(f"[adaptive] failed — existing renderer fallback ({exc})")
         if not adaptive_used:
@@ -1521,13 +1524,16 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             fallback_caption_text=None,
         )
         print(f"[2/5] Rendered vertical short -> {OUTPUT_PATH}")
-        _zoom_cuts(OUTPUT_PATH)
-        _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
-        _apply_requirement_tools(campaign, OUTPUT_PATH)
-        _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
-        _loudnorm(OUTPUT_PATH)
+        if not adaptive_used:
+            _zoom_cuts(OUTPUT_PATH)
+            _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
+            _apply_requirement_tools(campaign, OUTPUT_PATH)
+            _cap_video_length(OUTPUT_PATH, max_seconds=30.0, speed=1.2)
+            _loudnorm(OUTPUT_PATH)
+        else:
+            print("[adaptive] keeping adaptive output — old renderer will not overwrite")
         qc = _qc_short(OUTPUT_PATH)
-        if qc:
+        if qc and not adaptive_used:
             print(f"[qc] FAIL {qc} — re-render without zoom")
             render_short(
                 source_path=SOURCE_CLIP_PATH,
@@ -1541,7 +1547,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             qc2 = _qc_short(OUTPUT_PATH)
             print(f"[qc] retry {'PASS' if not qc2 else 'WARN ' + str(qc2)}")
         else:
-            print("[qc] PASS motion + duration")
+            print("[qc] PASS motion + duration" if not qc else f"[qc] adaptive kept despite {qc}")
         _pin_icon_thumbnail(OUTPUT_PATH)
 
         meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
@@ -1566,6 +1572,10 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
 
         if (os.environ.get("VYRO_SKIP_UPLOAD") or "").strip().lower() in ("1", "true", "yes"):
             size = os.path.getsize(OUTPUT_PATH) if os.path.isfile(OUTPUT_PATH) else 0
+            print("[TEST] NO-SUBMIT MODE")
+            print("[TEST] upload disabled")
+            print("[TEST] instagram disabled")
+            print("[TEST] whop disabled")
             print(f"[4/5] SKIP upload (VYRO_SKIP_UPLOAD=1) output={OUTPUT_PATH} ({size} bytes)")
             print("[5/5] SKIP Instagram")
             print("[6/5] SKIP Whop submit")

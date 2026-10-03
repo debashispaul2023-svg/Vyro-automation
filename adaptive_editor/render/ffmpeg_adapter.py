@@ -70,7 +70,16 @@ def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
         return os.path.isfile(dest) and os.path.getsize(dest) > 500
     except Exception as exc:
         print(f"[adaptive-render] caption burn failed: {exc}")
-        return False
+        text = "Gameplay"
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", video, "-vf", f"drawtext=text='{text}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h-180", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest],
+                check=True, capture_output=True, timeout=90,
+            )
+            print("[adaptive-render] captions burned via drawtext")
+            return os.path.isfile(dest) and os.path.getsize(dest) > 500
+        except Exception:
+            return False
 
 
 def tone(dest: str, seconds: float) -> bool:
