@@ -104,6 +104,7 @@ jobs:
           ELEVENLABS_API_KEYS: ${{ secrets.ELEVENLABS_API_KEYS }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
           WHOP_ENABLE_DISCOVER: "1"
+          ADAPTIVE_EDITOR_ENABLED: "1"
         run: python daily_runner.py
 
       - name: Upload rendered short as artifact
