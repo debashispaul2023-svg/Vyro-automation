@@ -213,7 +213,7 @@ def _compat(prev, nxt) -> float:
     return 0.4 if nxt.gameplay_event == "menu" else 1.2
 
 
-def build_story(shots: list, target: float = 16.0) -> list:
+def build_story(shots: list, target: float = 23.0) -> list:
     if not shots:
         return []
     print(f"[story] analyzing {len(shots)} shots")
@@ -366,7 +366,7 @@ def stitch_from_story(clips: list, dest_path: str, campaign_blob: str = "") -> b
     if not shots:
         print("[story] no shots — using deterministic fallback")
         return False
-    picked = build_story(shots, target=16.0)
+    picked = build_story(shots, target=23.0)
     if len(picked) < 2:
         print("[story] story too thin — using deterministic fallback")
         return False

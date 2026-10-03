@@ -77,8 +77,8 @@ def try_render(clips: list[str], dest: str) -> dict:
         for path in clips[:5]:
             plan["clips"].append({
                 "clip": path,
-                "start": 0.3,
-                "end": 3.4,
+                "start": 0.2,
+                "end": 4.6,
                 "role": "VISUAL",
                 "reason": "campaign selected individual clip",
             })

@@ -1545,6 +1545,7 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             _loudnorm(OUTPUT_PATH)
         else:
             print("[adaptive] keeping adaptive output — old renderer will not overwrite")
+            _cap_video_length(OUTPUT_PATH, max_seconds=24.5, speed=1.0)
         qc = _qc_short(OUTPUT_PATH)
         if qc and not adaptive_used:
             print(f"[qc] FAIL {qc} — re-render without zoom")
