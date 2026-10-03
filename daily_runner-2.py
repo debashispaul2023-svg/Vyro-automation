@@ -1510,10 +1510,23 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
         if (os.environ.get("ADAPTIVE_EDITOR_ENABLED") or "0").strip() == "1":
             try:
                 from adaptive_bridge import try_render
-                selected = sorted(glob.glob("work/merge/raw_*.mp4")) or [SOURCE_CLIP_PATH]
-                print("[adaptive] campaign clips:", selected)
-                adaptive = try_render(selected, OUTPUT_PATH)
-                adaptive_used = bool(adaptive.get("ok") and os.path.isfile(OUTPUT_PATH))
+                selected = []
+                pack = list(getattr(campaign, "_merge_pack", None) or [])
+                os.makedirs("work/adaptive_sources", exist_ok=True)
+                key = (os.environ.get("GOOGLE_DRIVE_API_KEY") or "").strip()
+                for i, clip in enumerate(pack[:5]):
+                    fid = clip.get("clip_id") or ""
+                    dest_clip = f"work/adaptive_sources/{i:02d}_{fid[:8]}.mp4"
+                    if fid and key:
+                        download_drive_file(fid, dest_clip, key)
+                    if os.path.isfile(dest_clip):
+                        print(f"[adaptive] selected id={fid} file={clip.get('name')} path={dest_clip}")
+                        selected.append(dest_clip)
+                if not selected:
+                    print("[adaptive] no individual campaign clips — fallback renderer")
+                else:
+                    adaptive = try_render(selected, OUTPUT_PATH)
+                    adaptive_used = bool(adaptive.get("ok") and os.path.isfile(OUTPUT_PATH))
             except Exception as exc:
                 print(f"[adaptive] failed — existing renderer fallback ({exc})")
         if not adaptive_used:

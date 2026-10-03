@@ -50,7 +50,7 @@ def concat(parts: list[str], dest: str, audio: str = "") -> bool:
             f.write(f"file '{os.path.abspath(part)}'\n")
     cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst]
     if audio and os.path.isfile(audio):
-        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=90)
@@ -63,7 +63,7 @@ def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
     path = os.path.abspath(srt).replace("\\", "/").replace(":", "\\:")
     cmd = ["ffmpeg", "-y", "-i", video]
     if audio and os.path.isfile(audio):
-        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
     cmd += ["-vf", f"subtitles='{path}':force_style='Fontsize=28,Outline=2,Alignment=2,MarginV=160'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=90)
