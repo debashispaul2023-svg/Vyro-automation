@@ -29,20 +29,25 @@ def probe(path: str) -> dict:
 def trim(src: str, start: float, end: float, dest: str) -> bool:
     length = max(0.3, end - start)
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    filt = (
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=12:1[bg];"
+        "[0:v]scale=1080:-2[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+    )
     try:
-        subprocess.run(
+        p = subprocess.run(
             [
                 "ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", src,
-                "-vf",
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=18:2[bg];"
-                "[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];"
-                "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1",
-                "-r", "24", "-an", dest,
+                "-filter_complex", filt, "-r", "24", "-an", dest,
             ],
-            check=True, capture_output=True, timeout=60,
+            capture_output=True, text=True, timeout=120,
         )
-        return os.path.isfile(dest) and os.path.getsize(dest) > 500
-    except Exception:
+        if p.returncode != 0 or not os.path.isfile(dest) or os.path.getsize(dest) < 500:
+            print(f"[adaptive-render] trim failed {os.path.basename(src)} {(p.stderr or '')[-180:]}")
+            return False
+        return True
+    except Exception as exc:
+        print(f"[adaptive-render] trim failed {os.path.basename(src)} {exc}")
         return False
 
 
