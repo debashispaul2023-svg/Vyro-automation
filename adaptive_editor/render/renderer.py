@@ -29,10 +29,9 @@ def render_plan(plan: dict, dest: str, work: str | None = None) -> dict:
     voice = plan.get("voice") or []
     if voice:
         text = " ".join(v.get("text") or "" for v in voice)
-        spoken = narrate(text, os.path.join(work, "voice.m4a"), float(plan.get("duration_target") or 8), provider=plan.get("tts_provider") or fixture_tts)
+        spoken = narrate(text, os.path.join(work, "voice.m4a"), float(plan.get("duration_target") or 8), provider=plan.get("tts_provider"))
         audio = spoken.get("path") or ""
-        if not spoken.get("ok"):
-            print("[adaptive-tts] no audio, continuing without narration")
+        print(f"[adaptive-tts] provider={spoken.get('provider')} fallback={spoken.get('fallback')}")
     plain = dest + ".plain.mp4"
     if not concat(parts, plain, ""):
         return _fail("concat failed")

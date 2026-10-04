@@ -1521,7 +1521,11 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
                         download_drive_file(fid, dest_clip, key)
                     if os.path.isfile(dest_clip):
                         print(f"[adaptive] selected id={fid} file={clip.get('name')} path={dest_clip}")
-                        selected.append(dest_clip)
+                        selected.append({
+                            "source_file_id": fid,
+                            "filename": clip.get("name") or "",
+                            "path": dest_clip,
+                        })
                 if not selected:
                     print("[adaptive] no individual campaign clips — fallback renderer")
                 else:
