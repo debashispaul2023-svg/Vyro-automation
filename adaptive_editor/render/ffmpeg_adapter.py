@@ -33,7 +33,10 @@ def trim(src: str, start: float, end: float, dest: str) -> bool:
         subprocess.run(
             [
                 "ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", src,
-                "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+                "-vf",
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=18:2[bg];"
+                "[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1",
                 "-r", "24", "-an", dest,
             ],
             check=True, capture_output=True, timeout=60,
@@ -64,7 +67,7 @@ def burn(video: str, srt: str, dest: str, audio: str = "") -> bool:
     cmd = ["ffmpeg", "-y", "-i", video]
     if audio and os.path.isfile(audio):
         cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
-    cmd += ["-vf", f"subtitles='{path}':force_style='Fontsize=28,Outline=2,Alignment=2,MarginV=160'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
+    cmd += ["-vf", f"subtitles='{path}':force_style='Fontname=Arial,Fontsize=16,Outline=1,Alignment=2,MarginV=90'", "-c:v", "libx264", "-pix_fmt", "yuv420p", dest]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=90)
         return os.path.isfile(dest) and os.path.getsize(dest) > 500

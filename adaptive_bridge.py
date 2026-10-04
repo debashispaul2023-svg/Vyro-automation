@@ -114,9 +114,13 @@ def try_render(clips, dest: str) -> dict:
         if seen.get("event") not in ("", "UNKNOWN", None):
             events.append(seen["event"])
     hook = max(rows, key=lambda r: r["duration"])
-    script = "Selected gameplay is on screen. The game is called Roll Anime Girls."
-    if events:
-        script = "Visible events: " + ", ".join(dict.fromkeys(events)) + ". The game is called Roll Anime Girls."
+    lines = [
+        "You roll the dice to unlock a character.",
+        "Place that character on your plot.",
+        "They earn money even while you are offline.",
+        "Try Roll Anime Girls on Roblox.",
+    ]
+    script = " ".join(lines)
     plan = {
         "source_clips": [r["source_path"] for r in rows],
         "story_structure": "HOOK-SETUP-ACTION-PAYOFF" if len(rows) >= 3 else "limited",
@@ -138,7 +142,7 @@ def try_render(clips, dest: str) -> dict:
             "role": roles[min(i, len(roles) - 1)],
             "reason": row["filename"],
         })
-        plan["captions"].append({"start": round(t, 2), "end": round(t + dur, 2), "text": script[:42]})
+        plan["captions"].append({"start": round(t, 2), "end": round(t + dur, 2), "text": lines[min(i, len(lines) - 1)]})
         t += dur
     plan["duration_target"] = round(t, 2)
     plan["target_duration"] = plan["duration_target"]
