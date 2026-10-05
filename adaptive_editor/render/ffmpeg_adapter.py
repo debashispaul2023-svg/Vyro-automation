@@ -30,8 +30,8 @@ def trim(src: str, start: float, end: float, dest: str) -> bool:
     length = max(0.3, end - start)
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     filt = (
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=12:1[bg];"
-        "[0:v]scale=1080:-2[fg];"
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:1[bg];"
+        "[0:v]scale=-2:1700[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
     )
     try:

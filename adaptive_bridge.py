@@ -115,10 +115,11 @@ def try_render(clips, dest: str) -> dict:
             events.append(seen["event"])
     hook = max(rows, key=lambda r: r["duration"])
     lines = [
-        "You roll the dice to unlock a character.",
-        "Place that character on your plot.",
-        "They earn money even while you are offline.",
-        "Try Roll Anime Girls on Roblox.",
+        "Can you roll your favorite character?",
+        "Roll the dice to unlock one.",
+        "Place it on your plot.",
+        "It earns money while you are offline.",
+        "The game is Roll Anime Girls.",
     ]
     script = " ".join(lines)
     plan = {
