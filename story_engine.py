@@ -229,7 +229,7 @@ def build_story(shots: list, target: float = 23.0) -> list:
         story_left = [s for s in remain if s.gameplay_event in story_events or s.characters_visible]
         pool = story_left or remain
         nxt = max(pool, key=lambda s: _compat(picked[-1], s) + s.story_score + 0.4 * s.payoff_score)
-        if nxt.gameplay_event in ("luck", "running", "menu") and story_left:
+        if nxt.path in {s.path for s in picked}:
             remain = [s for s in remain if s is not nxt]
             continue
         if _compat(picked[-1], nxt) < 0.5 and len(picked) > 1 and story_left:
@@ -274,7 +274,9 @@ def _cut_segment(src: str, start: float, end: float, dest: str) -> bool:
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{ln:.2f}", "-i", src,
-             "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+             "-filter_complex",
+             "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:1[bg];"
+             "[0:v]scale=-2:1700[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1",
              "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
              "-c:a", "aac", "-ar", "44100", dest],
             check=True, capture_output=True, timeout=60,
