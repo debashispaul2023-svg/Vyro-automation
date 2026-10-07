@@ -2,8 +2,7 @@ name: Vyro Daily Full Automation
 
 on:
   schedule:
-    # 2 videos/day. USA audience, US Eastern. Cron is UTC. EDT = UTC-4 (Mar–Nov).
-    - cron: "0 16 * * *"  # 12:00 PM ET / 9:30 PM IST — US lunch
+    # 1 video/day. USA audience, US Eastern. Cron is UTC. EDT = UTC-4 (Mar–Nov).
     - cron: "0 0 * * *"   #  8:00 PM ET / 5:30 AM IST — prime Shorts night
   workflow_dispatch: {}
 
