@@ -1759,6 +1759,11 @@ def publish_pending() -> int:
     print(f"[approval] APPROVED - publishing: {meta.title}")
     status = _publish_and_submit(data.get("platform") or "whop", campaign, req, meta)
     if status == 0:
+        try:
+            import usage_guard
+            usage_guard.record_publish()
+        except Exception:  # noqa: BLE001
+            pass
         _record_used(_load_clip_log(), campaign, pack)
         approval.clear_pending()
         print("[approval] published + cleared pending")
@@ -1780,6 +1785,11 @@ def main() -> int:
                 print("[approval] nothing pending to approve.")
                 return 0
             return publish_pending()
+        import usage_guard
+        done, cap = usage_guard.published_today(), usage_guard.max_videos_per_day()
+        if done >= cap:
+            print(f"[limit] {done}/{cap} video(s) already published today (UTC). Skipping - 1 video per day.")
+            return 0
         if approval.required() and approval.has_pending():
             age = approval.pending_age_hours()
             if age > approval.EXPIRE_HOURS:
@@ -1853,6 +1863,11 @@ def main() -> int:
 
     status = process_campaign(platform, campaign, preferred_clip=nxt)
     if status == 0:
+        try:
+            import usage_guard
+            usage_guard.record_publish()
+        except Exception:  # noqa: BLE001
+            pass
         _record_used(clip_log, campaign, pack)
         return 0
     if status == 3:

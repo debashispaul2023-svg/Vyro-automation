@@ -51,3 +51,8 @@ Assets: assets/sfx/*.mp3 (your SFX + Wii Party), assets/fonts/Inter-SemiBold.otf
 - workflow: concurrency group (no parallel runs), env for the above, review artifact + commit of review/ and usage_log.json.
 - The root-level vyro_daily.yml is an old copy that GitHub ignores (only .github/workflows/ runs) - delete it.
 - _record_used() / publish_pending() refactor in main(); tests: tests/test_approval_usage.py (2 pass).
+
+# Step 3b - 1 video per day
+- usage_guard.max_videos_per_day() (env VYRO_MAX_VIDEOS_PER_DAY, default 1) + record_publish(): main() skips when a video was already
+  published today (UTC). Counts only APPROVED/PUBLISHED videos (a rejected Short does not use the day's slot).
+- The schedule itself is one run/day: cron "0 0 * * *" (= 05:30 IST) in .github/workflows/vyro_daily.yml.

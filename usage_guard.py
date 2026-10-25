@@ -55,3 +55,21 @@ def record_tts(chars: int) -> None:
         LOG.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except OSError:
         pass
+
+
+def max_videos_per_day() -> int:
+    return _int("VYRO_MAX_VIDEOS_PER_DAY", 1)
+
+
+def published_today() -> int:
+    return int((_load().get(_today()) or {}).get("videos_published", 0))
+
+
+def record_publish() -> None:
+    data = _load()
+    day = data.setdefault(_today(), {})
+    day["videos_published"] = int(day.get("videos_published", 0)) + 1
+    try:
+        LOG.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass

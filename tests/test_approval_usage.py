@@ -51,6 +51,18 @@ def test_usage_guard_limits():
     assert not ug.check_tts(60)[0]
 
 
+
+
+
+def test_one_video_per_day():
+    tmp = tempfile.mkdtemp()
+    _, ug = _fresh(tmp)
+    os.environ.pop("VYRO_MAX_VIDEOS_PER_DAY", None)
+    assert ug.max_videos_per_day() == 1 and ug.published_today() == 0
+    ug.record_publish()
+    assert ug.published_today() >= ug.max_videos_per_day()
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):
