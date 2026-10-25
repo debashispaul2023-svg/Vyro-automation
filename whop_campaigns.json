@@ -5,11 +5,12 @@
     "money roll"
   ],
   "allow_name_markers": [
-    "roll anime girls",
-    "steal a seed",
-    "world athletics",
     "how to fisch",
-    "sunshine valley"
+    "roll anime girls",
+    "scrub or die",
+    "steal a seed",
+    "sunshine valley",
+    "world athletics"
   ],
   "joined_campaigns": [
     {
@@ -17,8 +18,7 @@
       "name_hint": "Roll Anime Girls",
       "campaign_uuid": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
       "game_link": "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls",
-      "reference_doc_url": "https://docs.google.com/document/d/1RRD6Jmnc9YQBqprv3ipjZpt3c5hDmVAzh_-K8fZnKoM/edit?usp=sharing",
-      "source_clip_url": "https://drive.google.com/drive/folders/1Xi98KNF6BVtez7uGbfqUR_31iq9YPUYh"
+      "reference_doc_url": "https://docs.google.com/document/d/1RRD6Jmnc9YQBqprv3ipjZpt3c5hDmVAzh_-K8fZnKoM/edit?usp=sharing"
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
@@ -34,8 +34,7 @@
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "How to Fisch",
-      "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch",
-      "source_clip_url": "https://drive.google.com/drive/folders/15GpPGJAMvG5ooypQMrhr5aSUZsJo2jxD"
+      "game_link": "https://www.roblox.com/games/119870009085173/How-to-Fisch"
     },
     {
       "url": "https://contentrewards.com/discover/86feeffa-1373-4ade-b37d-e8356f9e35fe",
@@ -46,6 +45,14 @@
       "discord": "https://discord.gg/jMm6EdTpZj",
       "hold_until_campaign": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
       "note": "Do not select until Roll Anime Girls clips are exhausted. No Drive footage folder yet."
+    },
+    {
+      "url": "https://contentrewards.com/c/campaigns/38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
+      "name_hint": "Scrub or Die",
+      "campaign_uuid": "38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
+      "platform": "contentrewards",
+      "payout": "$0.80 per 1K views per platform, min $0.80, max $300 per submission",
+      "note": "BloxClips x Content Rewards. Footage/Drive folder + rules are locked until joined: add source_clip_url when you have the footage folder. The bot cannot submit to contentrewards.com yet - post, then submit the link by hand."
     }
   ]
 }
