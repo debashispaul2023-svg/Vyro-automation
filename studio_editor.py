@@ -366,6 +366,9 @@ def render_short(source: str, dest: str, game_name: str, brief: str = "", index:
         kws |= {re.sub(r"[^a-z0-9]", "", w.lower()) for w in name.split()}
         if name.startswith("+1"):
             kws |= {"plus", "one", "1"}
+        info = probe(source)                     # check the footage BEFORE spending voice credits
+        if info["duration"] < 3 or not info["width"]:
+            return {"ok": False, "reason": "source unreadable/short"}
         work = Path(tempfile.mkdtemp(prefix="studio_"))
         if voice_provider is None:
             from tts_engine import generate_voiceover as voice_provider  # type: ignore
@@ -377,9 +380,6 @@ def render_short(source: str, dest: str, game_name: str, brief: str = "", index:
         voice_end = max(voice_end, vo_dur - 0.15)
         total = voice_end / VO_TEMPO + TAIL
         total = min(total, max_seconds)
-        info = probe(source)
-        if info["duration"] < 3 or not info["width"]:
-            return {"ok": False, "reason": "source unreadable/short"}
         motion = motion_profile(source, info["duration"])
         segs = plan_segments(info["duration"], total, motion)
         if not segs:
@@ -406,8 +406,20 @@ def render_short(source: str, dest: str, game_name: str, brief: str = "", index:
         return {"ok": False, "reason": str(exc)}
 
 
+class StudioStrictError(BaseException):
+    """Raised only when STUDIO_STRICT=1 and the studio edit failed. It is a BaseException on purpose:
+    the caller's `except Exception` fallback must NOT swallow it, so test runs fail loudly with the reason
+    instead of silently producing an old-style video."""
+
+
 def render_campaign_short(source: str, dest: str, campaign=None, req=None, clip_index: int = 0) -> dict:
     name = (getattr(campaign, "name", "") or "").strip()
     brief = getattr(campaign, "requirements_text", "") or ""
     max_s = float(getattr(req, "max_seconds", 30.0) or 30.0)
-    return render_short(source, dest, name, brief, clip_index, max_seconds=min(30.0, max_s))
+    res = render_short(source, dest, name, brief, clip_index, max_seconds=min(30.0, max_s))
+    if not res.get("ok"):
+        print(f"[studio] NOT USED, reason: {res.get('reason')}")
+        if (os.environ.get("STUDIO_STRICT") or "0").strip() == "1":
+            raise StudioStrictError(f"studio editor failed (STUDIO_STRICT=1): {res.get('reason')}")
+        print("[studio] falling back to the OLD renderer")
+    return res
