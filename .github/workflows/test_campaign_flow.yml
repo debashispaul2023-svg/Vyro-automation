@@ -42,6 +42,8 @@ jobs:
           PYTHONUNBUFFERED: "1"
           VYRO_SKIP_UPLOAD: "1"
           ADAPTIVE_EDITOR_ENABLED: "1"
+          STUDIO_EDITOR: "1"
+          STUDIO_STRICT: "1"
           CLIP_REUSE: "1"
           WHOP_COOKIE_HEADER: ${{ secrets.WHOP_COOKIE_HEADER }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
