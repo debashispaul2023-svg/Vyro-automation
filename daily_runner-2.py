@@ -1618,29 +1618,49 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             print("[6/5] SKIP Whop submit")
             return 0
 
-        youtube_url = None
-        if _youtube_token_ready():
-            try:
-                yt = upload_video(
-                    video_path=OUTPUT_PATH,
-                    title=meta.title,
-                    description=meta.description,
-                    tags=meta.tags,
-                    privacy_status="unlisted",
-                    token_path="token.json",
-                )
-                youtube_url = yt.video_url
-                print(f"[4/5] Uploaded to YouTube (backup, unlisted): {youtube_url}")
-            except UploadError as exc:
-                print(f"[4/5] YouTube upload failed (IG is primary, continuing): {exc}", file=sys.stderr)
-        else:
-            print("[4/5] No usable YouTube token — skipping YT. Instagram is the main target.")
+        if _approval_required():
+            import approval
+            approval.save_pending(platform, campaign, OUTPUT_PATH, meta, list(getattr(campaign, "_merge_pack", None) or []))
+            print("[approval] Short rendered + validated. WAITING FOR YOUR APPROVAL - nothing was uploaded or submitted.")
+            print(approval.summary(approval.load_pending()))
+            return 3
     except RenderError as exc:
         print(f"Rendering failed: {exc}", file=sys.stderr)
         return 1
     except ValidationError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    return _publish_and_submit(platform, campaign, req, meta)
+
+
+def _approval_required() -> bool:
+    try:
+        import approval
+        return approval.required()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _publish_and_submit(platform: str, campaign: Campaign, req: CampaignRequirements, meta: VideoMetadata) -> int:
+    """Upload (YouTube backup + Instagram main) and submit the links. Only runs AFTER approval."""
+    youtube_url = None
+    if _youtube_token_ready():
+        try:
+            yt = upload_video(
+                video_path=OUTPUT_PATH,
+                title=meta.title,
+                description=meta.description,
+                tags=meta.tags,
+                privacy_status="unlisted",
+                token_path="token.json",
+            )
+            youtube_url = yt.video_url
+            print(f"[4/5] Uploaded to YouTube (backup, unlisted): {youtube_url}")
+        except UploadError as exc:
+            print(f"[4/5] YouTube upload failed (IG is primary, continuing): {exc}", file=sys.stderr)
+    else:
+        print("[4/5] No usable YouTube token — skipping YT. Instagram is the main target.")
 
     instagram_media_id = None
     try:
@@ -1685,7 +1705,92 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
     return 2
 
 
+def _record_used(clip_log: dict, campaign: Campaign, pack: list) -> None:
+    for piece in pack:
+        row = {
+            "campaign_id": campaign.campaign_id,
+            "clip_id": piece["clip_id"],
+            "name": piece.get("name", ""),
+            "url": piece.get("url", ""),
+            "kind": piece.get("kind", ""),
+        }
+        clip_log["clips"].append(row)
+        try:
+            import footage_usage
+            footage_usage.record({
+                "source_file_id": piece["clip_id"],
+                "source_file": piece.get("name", ""),
+                "campaign": campaign.campaign_id,
+                "start": 0,
+                "end": 0,
+            })
+            print(f"[footage] selected={piece.get('name') or piece['clip_id']} duplicate=NO")
+        except Exception as exc:
+            print(f"[footage] record skipped: {exc}")
+    _save_clip_log(clip_log)
+    print(f"Recorded {len(pack)} merged clip(s) for campaign {campaign.campaign_id}.")
+
+
+def publish_pending() -> int:
+    """APPROVED by the user: upload the already-rendered Short and submit it. No re-render, no new voice credits."""
+    import dataclasses
+    import approval
+    from game_context import set_game
+    data = approval.load_pending()
+    cls = {"WhopCampaign": WhopCampaign, "VyroCampaign": VyroCampaign}.get(data.get("campaign_class"))
+    if cls is None:
+        print(f"[approval] unknown campaign class {data.get('campaign_class')!r} - not publishing")
+        return 1
+    names = {f.name for f in dataclasses.fields(cls)}
+    campaign = cls(**{k: v for k, v in (data.get("campaign") or {}).items() if k in names})
+    pack = list(data.get("pack") or [])
+    campaign._merge_pack = pack  # type: ignore[attr-defined]
+    set_game(campaign.name or "")
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+    shutil.copy(approval.PENDING_VIDEO, OUTPUT_PATH)
+    req = _parse_requirements(campaign)
+    meta = VideoMetadata(title=data.get("title", ""), description=data.get("description", ""), tags=list(data.get("tags") or []))
+    try:
+        validate_or_raise(video_path=OUTPUT_PATH, title=meta.title, description=meta.description, req=req)
+    except ValidationError as exc:
+        print(str(exc), file=sys.stderr)
+        print("[approval] approved Short FAILED the final check - NOT published. Pending kept.")
+        return 1
+    print(f"[approval] APPROVED - publishing: {meta.title}")
+    status = _publish_and_submit(data.get("platform") or "whop", campaign, req, meta)
+    if status == 0:
+        _record_used(_load_clip_log(), campaign, pack)
+        approval.clear_pending()
+        print("[approval] published + cleared pending")
+    else:
+        print("[approval] publish did not complete - pending kept so you can retry")
+    return 0 if status in (0, 2) else status
+
+
 def main() -> int:
+    try:
+        import approval
+        cmd = approval.command()
+        if cmd == "reject":
+            approval.clear_pending()
+            print("[approval] REJECTED - pending Short discarded. Its clips were never marked used.")
+            return 0
+        if cmd == "approve":
+            if not approval.has_pending():
+                print("[approval] nothing pending to approve.")
+                return 0
+            return publish_pending()
+        if approval.required() and approval.has_pending():
+            age = approval.pending_age_hours()
+            if age > approval.EXPIRE_HOURS:
+                print(f"[approval] pending Short is {age:.0f}h old - expired, discarded.")
+                approval.clear_pending()
+            else:
+                print(f"[approval] a Short is waiting for your approval ({age:.1f}h). Skipping today's render "
+                      f"(protects voice credits). Approve or reject it from the workflow.")
+                return 0
+    except ImportError:
+        pass
     clip_log = _load_clip_log()
     if (os.environ.get("CLIP_REUSE") or "").strip().lower() in ("1", "true", "yes"):
         print("[clips] CLIP_REUSE=1 — old folder clips can be picked again")
@@ -1748,29 +1853,10 @@ def main() -> int:
 
     status = process_campaign(platform, campaign, preferred_clip=nxt)
     if status == 0:
-        for piece in pack:
-            row = {
-                    "campaign_id": campaign.campaign_id,
-                    "clip_id": piece["clip_id"],
-                    "name": piece.get("name", ""),
-                    "url": piece.get("url", ""),
-                    "kind": piece.get("kind", ""),
-                }
-            clip_log["clips"].append(row)
-            try:
-                import footage_usage
-                footage_usage.record({
-                    "source_file_id": piece["clip_id"],
-                    "source_file": piece.get("name", ""),
-                    "campaign": campaign.campaign_id,
-                    "start": 0,
-                    "end": 0,
-                })
-                print(f"[footage] selected={piece.get('name') or piece['clip_id']} duplicate=NO")
-            except Exception as exc:
-                print(f"[footage] record skipped: {exc}")
-        _save_clip_log(clip_log)
-        print(f"Recorded {len(pack)} merged clip(s) for campaign {campaign.campaign_id}.")
+        _record_used(clip_log, campaign, pack)
+        return 0
+    if status == 3:
+        print("Waiting for approval. Clips NOT marked used yet.")
         return 0
     if status == 2:
         print("Rendered but no IG/YouTube publish. Clip NOT marked used.")

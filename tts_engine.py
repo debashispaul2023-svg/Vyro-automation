@@ -128,6 +128,15 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
         return None, []
 
     spoken = _humanize_script(text)
+    try:
+        import usage_guard
+        allowed, why = usage_guard.check_tts(len(spoken))
+        print(f"[credits] ElevenLabs {why}")
+        if not allowed:
+            print("[credits] voice skipped to protect credits")
+            return None, []
+    except ImportError:
+        usage_guard = None
     voice = _voice()
     url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
     settings = {
@@ -188,6 +197,8 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
             words = _words_from_alignment(spoken, data.get("alignment"))
             side = Path(dest_mp3).with_suffix(".words.json")
             side.write_text(json.dumps(words), encoding="utf-8")
+            if usage_guard:
+                usage_guard.record_tts(len(spoken))
             print(f"[voice] ElevenLabs ok ({len(words)} word timings)")
             return dest_mp3, words
         except Exception as exc:

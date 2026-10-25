@@ -39,3 +39,15 @@ Hardcoded "Roll Anime Girls" removed from: adaptive_bridge.py, adaptive_editor p
 (now read the current game via game_context.py, set once per campaign).
 Tests: `python3 tests/test_studio_editor.py` (6 pass). The 3 failures in adaptive_editor/tests also fail on the ORIGINAL code.
 Assets: assets/sfx/*.mp3 (your SFX + Wii Party), assets/fonts/Inter-SemiBold.otf.
+
+# Step 3 - approval gate + credit limits
+- approval.py + daily_runner-2.py: after render + validation the bot SAVES the Short (review/pending_short.mp4 + pending.json)
+  and STOPS. Nothing is uploaded to YouTube/Instagram or submitted to Whop. Clips are NOT marked used.
+  Workflow input `publish_pending`: approve -> upload + submit (no re-render, no new voice credits); reject -> discard.
+  While one is pending the daily run does nothing; a pending Short expires after 72h. Review file = artifact `review-short`.
+  Turn the gate off with VYRO_REQUIRE_APPROVAL=0.
+- usage_guard.py + tts_engine.py: ElevenLabs limits - 4 generations/run, 2500 chars/day, 700 chars/call (env-tunable),
+  logged as `[credits] ...`; blocked calls skip the voice (studio falls back to the old renderer). usage_log.json is committed by the workflow.
+- workflow: concurrency group (no parallel runs), env for the above, review artifact + commit of review/ and usage_log.json.
+- The root-level vyro_daily.yml is an old copy that GitHub ignores (only .github/workflows/ runs) - delete it.
+- _record_used() / publish_pending() refactor in main(); tests: tests/test_approval_usage.py (2 pass).
