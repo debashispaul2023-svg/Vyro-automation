@@ -268,9 +268,15 @@ class AIMetadata:
     instagram_caption: str
 
 
-def ai_generate_metadata(hook: str, summary: str, mandatory_hashtags: list[str], required_links: list[str], referral_code: Optional[str]) -> AIMetadata:
+def ai_generate_metadata(hook: str, summary: str, mandatory_hashtags: list[str], required_links: list[str], referral_code: Optional[str], game: Optional[str] = None) -> AIMetadata:
+    game = (game or "").strip()
+    rules = (
+        f"The ONLY game is \"{game}\". Put \"{game}\" in the title. Description must say it is out now on Roblox and include the exact line \"Game is called {game}.\". "
+        "Never mention any other game. Do not invent rewards, codes, updates or gameplay that is not in the summary. Title under 70 chars. Max 3 hashtags.\n"
+        if game else "Never invent rewards, codes or gameplay. Title under 70 chars. Max 3 hashtags.\n"
+    )
     data = _call_json(
-        "Write Shorts metadata. JSON only with title, description, hashtags, instagram_caption.\n"
+        "Write Shorts metadata. JSON only with title, description, hashtags, instagram_caption.\n" + rules +
         f"Hook: {hook}\nSummary: {summary or '(none)'}\n"
         f"Hashtags: {', '.join(mandatory_hashtags) or '(none)'}\n"
         f"Links: {', '.join(required_links) or '(none)'}\n"
@@ -281,8 +287,10 @@ def ai_generate_metadata(hook: str, summary: str, mandatory_hashtags: list[str],
         if link not in description:
             description += f"\n{link}"
     title = data.get("title", "") or hook
-    if "roll anime" in (hook + " " + title).lower() and "roll anime girls" not in title.lower():
-        title = f"Roll Anime Girls {title}".strip()
+    if game and game.lower() not in title.lower():
+        title = f"{game} {title}".strip()
+    if game and f"game is called {game}".lower() not in description.lower():
+        description = (description.rstrip() + f"\nGame is called {game}.").strip()
     locked = ["#shorts", "#roblox"]
     for tag in locked + list(mandatory_hashtags or []):
         t = tag if str(tag).startswith("#") else f"#{tag}"

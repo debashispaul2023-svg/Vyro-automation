@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 
+def _game() -> str:
+    try:
+        from game_context import current_game
+        return current_game()
+    except Exception:
+        return "this game"
+
+
 def captions(steps: list) -> list:
     rows = []
     t = 0.0
@@ -18,6 +26,6 @@ def captions(steps: list) -> list:
         rows.append({
             "start": round(t, 2),
             "end": round(t + 0.8, 2),
-            "text": "Try Roll Anime Girls on Roblox",
+            "text": f"Game is called {_game()}",
         })
     return rows

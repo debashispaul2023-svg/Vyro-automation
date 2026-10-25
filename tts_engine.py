@@ -10,11 +10,15 @@ from pathlib import Path
 import requests
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
-# Callum — first voice in the reference short, more human than Adam.
-# Chris — brighter, more energetic male than Callum.
-DEFAULT_VOICE = "iP95p4xoKVk53GoZ742B"
-DEFAULT_MODEL = "eleven_multilingual_v2"
-FALLBACK_MODEL = "eleven_turbo_v2_5"
+# "Loyal - Viral Shortform Content": the voice used for the Scrub or Die / Dead Age Shorts.
+# NOTE: a GitHub secret ELEVENLABS_VOICE_ID still overrides this. Delete or update that secret.
+DEFAULT_VOICE = "mI8xLTBNjMXAf31I4xlB"
+DEFAULT_MODEL = "eleven_v4"
+FALLBACK_MODEL = "eleven_multilingual_v2"
+LAST_RESORT_MODEL = "eleven_turbo_v2_5"
+# eleven_v4 is generated with the voice's own defaults (that is how the Shorts were made);
+# the tuned settings below only apply to the older fallback models.
+MODELS_WITHOUT_SETTINGS = {"eleven_v4"}
 
 
 def _keys() -> list[str]:
@@ -141,13 +145,14 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
             print(f"[voice] ElevenLabs key #{i}/{len(keys)} ({masked}) voice={voice[-6:]}")
             resp = None
             last_status = None
-            for model in (DEFAULT_MODEL, FALLBACK_MODEL):
+            for model in (DEFAULT_MODEL, FALLBACK_MODEL, LAST_RESORT_MODEL):
                 payload = {
                     "text": spoken,
                     "model_id": model,
-                    "voice_settings": settings,
                     "apply_text_normalization": "auto",
                 }
+                if model not in MODELS_WITHOUT_SETTINGS:
+                    payload["voice_settings"] = dict(settings)
                 resp = requests.post(
                     url,
                     headers={"xi-api-key": key, "Content-Type": "application/json"},
@@ -159,7 +164,7 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
                 if resp.status_code == 200:
                     print(f"[voice] model {model}")
                     break
-                if resp.status_code == 400 and "speed" in payload.get("voice_settings", {}):
+                if resp.status_code == 400 and "speed" in (payload.get("voice_settings") or {}):
                     payload["voice_settings"].pop("speed", None)
                     resp = requests.post(
                         url,

@@ -1,6 +1,14 @@
 """Planning only. Renderer executes this. Renderer does not invent the story."""
 from __future__ import annotations
 
+
+def _game() -> str:
+    try:
+        from game_context import current_game
+        return current_game()
+    except Exception:
+        return "this game"
+
 from .caption_planner import captions
 from .voice_planner import script_for
 
@@ -24,7 +32,7 @@ def plan(story, review: dict | None = None) -> dict:
         "voice": [{"text": script, "start": 0.2}],
         "effects": [{"type": "hold", "when": "reveal"}] if any(c.get("reason") in ("RARE_REVEAL", "CHARACTER_REVEAL") for c in clips) else [],
         "hook": story.hook,
-        "cta": {"text": "Try Roll Anime Girls on Roblox", "at": "end"},
+        "cta": {"text": f"Game is called {_game()}", "at": "end"},
         "review": review or {},
         "signature": {
             "hook_type": (story.hook or {}).get("reason", "").lower(),

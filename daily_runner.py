@@ -32,29 +32,14 @@ except Exception as exc:
     print(f"[story] attach skipped: {exc}")
 
 
-# Keyword in the first 40 chars. One #shorts at the end. 60-char range.
-_TITLE_VARIANTS = (
-    "Roll Anime Girls Roblox: Dice Roll, Earn Offline #shorts",
-    "Roll Anime Girls Roblox RNG: Place and Earn Offline #shorts",
-    "Roll Anime Girls on Roblox: Offline Money Tycoon #shorts",
-)
-_GAME_LINK = "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls"
-_DESC = (
-    "Roll Anime Girls is a Roblox RNG tycoon. Roll the dice, unlock a character, "
-    "place them on your plot, and they earn money even while you are offline.\n\n"
-    "Luck potions help rarer rolls. Rebirth gives permanent boosts. "
-    "Game is called Roll Anime Girls on Roblox.\n"
-    "Try Roll Anime Girls on Roblox.\n"
-    + _GAME_LINK
-    + "\n\n#shorts #roblox #rollanimegirls #rng #tycoon"
-)
-
-
 def _force_upload_title(title: str, description: str) -> tuple[str, str]:
-    seed = sum(ord(c) for c in (title or "Roll Anime Girls"))
-    raw = _TITLE_VARIANTS[seed % len(_TITLE_VARIANTS)][:100].rstrip()
-    print(f"[seo] title {raw!r} ({len(raw)} chars)")
-    return raw, _DESC
+    """Validate the REAL title/description (old code swapped in a hardcoded
+    Roll Anime Girls title, so the checker never saw the real one).
+    Only fixes the '#shorts' spacing."""
+    import re
+    t = re.sub(r"\s+", " ", title or "").strip()
+    t = re.sub(r"(?<=\S)(#shorts)", r" \1", t, flags=re.IGNORECASE)
+    return t, description or ""
 
 
 def _install_upload_guard() -> None:

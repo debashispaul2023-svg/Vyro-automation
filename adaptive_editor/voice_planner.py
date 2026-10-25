@@ -22,5 +22,10 @@ def script_for(steps: list) -> tuple[str, list]:
     lines = [LINES[ev] for ev in events if ev in LINES]
     if not lines:
         lines = ["This is the gameplay that is actually on screen."]
-    lines.append("The game is called Roll Anime Girls.")
+    try:
+        from game_context import current_game
+        game = current_game()
+    except Exception:
+        game = "this game"
+    lines.append(f"The game is called {game}.")
     return " ".join(lines), []

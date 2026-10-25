@@ -1,0 +1,41 @@
+{
+  "_comment": "Per-game voice scripts. [brackets] = red caption keywords (brackets are never spoken). Only say what is true about the footage/brief. {name} is replaced with the game name. Add a game by adding a block here.",
+  "scrub or die": {
+    "name": "Scrub or Die",
+    "hashtags": ["#scrubordie", "#roblox", "#robloxhorror"],
+    "scripts": [
+      ["Would you [clean] this town?", "[Dirty Townville.]", "Trash on every [corner,] no lights.", "[Scrub or Die] is out now on Roblox.", "Game is called [Scrub or Die.]"],
+      ["Don't walk down this street at [night.]", "[Dirty Townville] is a mess.", "Your job? [Scrub] it clean.", "[Scrub or Die] is out now on Roblox.", "Game is called [Scrub or Die.]"],
+      ["Rate this town, [one to ten.]", "Trash on every [corner.]", "This is [Dirty Townville] in [Scrub or Die,] out now on Roblox.", "Game is called [Scrub or Die.]"]
+    ]
+  },
+  "roll anime girls": {
+    "name": "Roll Anime Girls",
+    "hashtags": ["#rollanimegirls", "#roblox", "#rng"],
+    "scripts": [
+      ["You [roll the dice] to unlock a character.", "Place that character on your [plot.]", "They [earn money] for you, even while you are offline.", "Luck potions help rarer rolls. Rebirth gives permanent boosts.", "The game is called [Roll Anime Girls.]"],
+      ["Here is how it works. [Roll] the dice. Unlock a character.", "Put them on your [plot] and they start earning cash, online and offline.", "Buy a luck potion for a rarer pull. Then rebirth for a permanent boost.", "Game is called [Roll Anime Girls.]"]
+    ]
+  },
+  "how to fisch": {
+    "name": "How to Fisch",
+    "hashtags": ["#howtofisch", "#roblox", "#fisch"],
+    "scripts": [
+      ["In this Roblox game you [catch] strange fish,", "upgrade your gear, and [fight.]", "The game is called [How to Fisch.]"]
+    ]
+  },
+  "tongue escape": {
+    "name": "+1 Tongue Escape",
+    "hashtags": ["#tongueescape", "#roblox"],
+    "scripts": [
+      ["Your [tongue] keeps growing while you escape.", "Game is called [Plus One Tongue Escape] on Roblox."]
+    ]
+  },
+  "_generic": {
+    "hashtags": ["#roblox"],
+    "scripts": [
+      ["Would you play [{name}?]", "[{name}] is out now on Roblox.", "Game is called [{name}.]"],
+      ["Have you tried [{name}] yet?", "It is out now on [Roblox.]", "Game is called [{name}.]"]
+    ]
+  }
+}

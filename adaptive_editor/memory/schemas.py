@@ -15,7 +15,7 @@ def memory_record(
     duration: float,
     qc_passed: bool,
     file_hash: str = "",
-    game: str = "Roll Anime Girls",
+    game: str = "",
     pacing: str = "adaptive",
     result: str = "unknown",
     performance: dict | None = None,

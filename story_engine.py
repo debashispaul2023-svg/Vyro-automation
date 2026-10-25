@@ -248,6 +248,13 @@ def build_story(shots: list, target: float = 23.0) -> list:
 
 
 def script_from_shots(shots: list, campaign_name: str = "") -> str:
+    if "anime" not in (campaign_name or "").lower():
+        try:
+            from game_context import current_game
+            game = current_game()
+        except Exception:
+            game = "this game"
+        return f"{game} is out now on Roblox. Game is called {game}."
     lines = [
         "You roll the dice to unlock a character.",
         "Place that character on your plot.",

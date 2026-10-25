@@ -1387,7 +1387,7 @@ def _parse_requirements(campaign: Campaign) -> CampaignRequirements:
         return req
 
 
-def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> VideoMetadata:
+def _generate_metadata(hook: str, summary: str, req: CampaignRequirements, game: str | None = None) -> VideoMetadata:
     blob = f"{hook}\n{summary}".lower()
     if "tongue" in blob:
         print("[meta] Tongue lock — official campaign wording only")
@@ -1434,6 +1434,7 @@ def _generate_metadata(hook: str, summary: str, req: CampaignRequirements) -> Vi
             mandatory_hashtags=req.mandatory_hashtags,
             required_links=req.required_links,
             referral_code=req.referral_code,
+            game=game,
         )
         return VideoMetadata(title=ai_meta.title, description=ai_meta.description, tags=ai_meta.hashtags)
     except (AIBrainError, MetadataError) as exc:
@@ -1468,6 +1469,8 @@ def _relax_min_seconds_to_source(req: CampaignRequirements, source_path: str) ->
 
 
 def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | None = None) -> int:
+    from game_context import set_game
+    set_game(getattr(campaign, "name", "") or "")
     req = _parse_requirements(campaign)
 
     try:
@@ -1507,7 +1510,22 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
         _relax_min_seconds_to_source(req, SOURCE_CLIP_PATH)
         _prep_footage(SOURCE_CLIP_PATH)
         adaptive_used = False
-        if (os.environ.get("ADAPTIVE_EDITOR_ENABLED") or "0").strip() == "1":
+        studio_used = False
+        if (os.environ.get("STUDIO_EDITOR") or "1").strip() != "0":
+            try:
+                import studio_editor
+                used_n = len((_load_clip_log().get("clips") or []))
+                studio = studio_editor.render_campaign_short(
+                    SOURCE_CLIP_PATH, OUTPUT_PATH, campaign=campaign, req=req, clip_index=used_n)
+                studio_used = bool(studio.get("ok") and os.path.isfile(OUTPUT_PATH))
+                if studio_used:
+                    adaptive_used = True   # keeps the old renderer from overwriting the studio output
+                    print(f"[studio] using studio edit -> {OUTPUT_PATH}")
+                else:
+                    print(f"[studio] not used ({studio.get('reason')}) - old renderer fallback")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[studio] failed - old renderer fallback ({exc})")
+        if not studio_used and (os.environ.get("ADAPTIVE_EDITOR_ENABLED") or "0").strip() == "1":
             try:
                 from adaptive_bridge import try_render
                 selected = []
@@ -1566,14 +1584,15 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
             print(f"[qc] retry {'PASS' if not qc2 else 'WARN ' + str(qc2)}")
         else:
             print("[qc] PASS motion + duration" if not qc else f"[qc] adaptive kept despite {qc}")
-        _pin_icon_thumbnail(OUTPUT_PATH)
+        if not studio_used:
+            _pin_icon_thumbnail(OUTPUT_PATH)
 
-        meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req)
+        meta = _generate_metadata(hook=hook, summary=(campaign.requirements_text or "")[:200], req=req, game=getattr(campaign, "name", None))
         try:
             from vidiq_metadata import deterministic, from_story
             vidiq = from_story({"events": [], "hook": hook, "structure": ""}, req.mandatory_hashtags)
             if not vidiq.get("ok"):
-                locked = deterministic(meta.title, req.mandatory_hashtags)
+                locked = deterministic(meta.title, req.mandatory_hashtags, game=getattr(campaign, "name", None))
                 for tag in locked["tags"]:
                     if tag.lower() not in (meta.title or "").lower() and tag.lower() not in (meta.description or "").lower():
                         meta.description = (meta.description or "") + f"\n{tag}"

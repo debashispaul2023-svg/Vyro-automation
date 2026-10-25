@@ -51,7 +51,8 @@ def adaptive_input(clips) -> dict:
             "end": round(min(4.6, max(0.8, dur - 0.1)), 2),
             "sha256": _hash(path),
         })
-    return {"selected_clips": rows, "campaign_context": "Roll Anime Girls"}
+    from game_context import current_game
+    return {"selected_clips": rows, "campaign_context": current_game()}
 
 
 def _vision(path: str) -> dict:
@@ -114,20 +115,31 @@ def try_render(clips, dest: str) -> dict:
         if seen.get("event") not in ("", "UNKNOWN", None):
             events.append(seen["event"])
     hook = max(rows, key=lambda r: r["duration"])
-    lines = [
-        "Can you roll your favorite character?",
-        "Roll the dice to unlock one.",
-        "Place it on your plot.",
-        "It earns money while you are offline.",
-        "The game is Roll Anime Girls.",
-    ]
+    from game_context import current_game
+    game = current_game()
+    if "anime" in game.lower():
+        lines = [
+            "Can you roll your favorite character?",
+            "Roll the dice to unlock one.",
+            "Place it on your plot.",
+            "It earns money while you are offline.",
+            f"The game is {game}.",
+        ]
+    else:   # no invented gameplay for other games
+        lines = [
+            f"Would you play {game}?",
+            "Watch this moment.",
+            "This is the gameplay on screen.",
+            f"{game} is out now on Roblox.",
+            f"Game is called {game}.",
+        ]
     script = " ".join(lines)
     plan = {
         "source_clips": [r["source_path"] for r in rows],
         "story_structure": "HOOK-SETUP-ACTION-PAYOFF" if len(rows) >= 3 else "limited",
         "hook": {"clip": hook["filename"], "reason": "longest selected campaign clip"},
         "render_mode": "adaptive",
-        "cta": "Try Roll Anime Girls on Roblox.",
+        "cta": f"Game is called {game}.",
         "clips": [],
         "voice": [{"text": script}],
         "captions": [],

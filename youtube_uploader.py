@@ -17,7 +17,7 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 DEFAULT_TOKEN_PATH = "token.json"
 GAMING_CATEGORY_ID = "20"
-SHARED_TAGS = ["Roll Anime Girls", "Roblox", "Roblox RNG", "shorts", "tycoon", "offline money"]
+SHARED_TAGS = ["Roblox", "shorts"]
 PUBLISHED_LOG = "published_log.json"
 
 # Official campaign lines — never paraphrase these.
@@ -36,6 +36,12 @@ CAMPAIGN_LOCK = {
         "name": "+1 Tongue Escape",
         "cta": "Game is called +1 Tongue Escape on Roblox.",
         "link": "",
+    },
+    "scrub or die": {
+        "name": "Scrub or Die",
+        "cta": "Game is called Scrub or Die.",
+        "link": "",
+        "tags": ["ScrubOrDie", "RobloxHorror"],
     },
     "steal a seed": {
         "name": "Steal A Seed",
@@ -197,10 +203,13 @@ def upload_video(
     description = _lock_description(title, description)
     creds = _load_credentials(token_path)
     extra = []
-    if "roll anime" in title.lower():
+    low_title = title.lower()
+    if "roll anime" in low_title:
         extra = ["RollAnimeGirls", "RobloxRNG", "Roblox"]
-    elif "fisch" in title.lower():
+    elif "fisch" in low_title:
         extra = ["HowToFisch", "Fisch", "Roblox"]
+    else:
+        extra = list((CAMPAIGN_LOCK.get(_match_key(title)) or {}).get("tags") or [])
     tag_list = _clean_tags(list(tags or []) + extra)
     desc = _with_hashtags(description, tag_list)
     privacy = _privacy(privacy_status)
