@@ -84,6 +84,7 @@ class WhopCampaign:
     submit_page_url: str
     reference_doc_url: Optional[str] = None
     platforms: list[str] = field(default_factory=list)
+    platform: str = "whop"            # "whop" | "contentrewards": decides where the link is submitted
 
 
 def _load_configured_campaigns() -> list[dict]:
@@ -864,13 +865,13 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "A clear CTA must be included. Example: Game is called World Athletics on Roblox.\n"
             "Only Roblox accounts. English-based."
         )
-    elif "scrub" in name.lower():
-        rules = (
-            f"{name}\n"
-            "The name Scrub or Die must be spoken somewhere in the video.\n"
-            "A clear CTA must be included. Example: Game is called Scrub or Die on Roblox.\n"
-            "Only Roblox accounts. English-based."
-        )
+    else:
+        # Any other campaign: rules come from the config `requirements` list, then the generic brief.
+        try:
+            import campaign_rules
+            rules = campaign_rules.rules_text(entry, name)
+        except Exception as exc:
+            print(f"[rules] generic rules failed ({exc}); using name only")
     print(f"[whop_client] config fallback campaign={cid} source={source[:80]}")
     return WhopCampaign(
         campaign_id=cid,
@@ -880,6 +881,7 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
         submit_page_url=url,
         reference_doc_url=entry.get("reference_doc_url"),
         platforms=["instagram", "youtube", "tiktok"],
+        platform=(entry.get("platform") or "whop").strip().lower(),
     )
 
 
@@ -912,15 +914,29 @@ def check_configured_campaigns(skip_ids=None) -> Optional[WhopCampaign]:
                 if hold and hold not in skip:
                     print(f"[whop] hold '{name_hint}' until campaign {hold} clips are exhausted")
                     continue
-                if (entry.get("platform") or "") == "contentrewards" and not (entry.get("source_clip_url") or "").strip():
-                    print(f"[whop] '{name_hint}' queued — no Drive footage folder yet")
-                    continue
-                try:
-                    _ensure_logged_in(page, url)
-                    campaign = _extract_campaign_details(page, url, name_hint=name_hint)
-                except Exception as exc:
-                    print(f"[whop_client] page open failed ({exc}); using config fallback if possible")
-                    campaign = None
+                is_cr = (entry.get("platform") or "").strip().lower() == "contentrewards"
+                if is_cr and not (entry.get("source_clip_url") or "").strip():
+                    # link alone is enough: find the BloxClips footage hub from the link / name
+                    try:
+                        from bloxclips_footage import resolve_campaign
+                        hub = resolve_campaign(link=url, name=name_hint)
+                    except Exception as exc:
+                        print(f"[whop] hub lookup failed for '{name_hint}': {exc}")
+                        hub = None
+                    if hub and hub.clips:
+                        entry["source_clip_url"] = hub.footage_url
+                        print(f"[whop] '{name_hint}' footage auto-resolved: {hub.footage_url}")
+                    else:
+                        print(f"[whop] '{name_hint}' queued — no footage hub or Drive folder found")
+                        continue
+                campaign = None
+                if not is_cr:   # Content Rewards is not a Whop page: never scrape it with the Whop session
+                    try:
+                        _ensure_logged_in(page, url)
+                        campaign = _extract_campaign_details(page, url, name_hint=name_hint)
+                    except Exception as exc:
+                        print(f"[whop_client] page open failed ({exc}); using config fallback if possible")
+                        campaign = None
                 if campaign is not None and _looks_like_whop_chrome(campaign.requirements_text):
                     print("[whop_client] scraped page is Whop chrome, not the campaign — using JSON fallback")
                     campaign = None

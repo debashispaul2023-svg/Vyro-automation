@@ -1,0 +1,215 @@
+{
+ "built": "2026-10-25T20:11:08Z",
+ "site": {},
+ "folders": [
+  {
+   "id": "root",
+   "name": "All footage",
+   "parent": null
+  },
+  {
+   "id": "refs",
+   "name": "Finished videos",
+   "parent": "root"
+  },
+  {
+   "id": "a73286d6081d",
+   "name": "ForgeGUI Showcase Campaign",
+   "parent": "root"
+  },
+  {
+   "id": "a179f5433cfb",
+   "name": "Gameplay Phone",
+   "parent": "a73286d6081d"
+  },
+  {
+   "id": "37d613455a88",
+   "name": "Total Disaster",
+   "parent": "a179f5433cfb"
+  },
+  {
+   "id": "43bffc5b9a2b",
+   "name": "Music",
+   "parent": "a73286d6081d"
+  },
+  {
+   "id": "4f366defceb4",
+   "name": "Scrub or Die Campaign",
+   "parent": "root"
+  },
+  {
+   "id": "db522789644f",
+   "name": "Music",
+   "parent": "4f366defceb4"
+  },
+  {
+   "id": "ecac2940d884",
+   "name": "Sound effects",
+   "parent": "4f366defceb4"
+  },
+  {
+   "id": "498c12c33e14",
+   "name": "Clips",
+   "parent": "4f366defceb4"
+  },
+  {
+   "id": "aa1bbd72c3aa",
+   "name": "Monster & Jumpscares",
+   "parent": "498c12c33e14"
+  },
+  {
+   "id": "64e5b379b258",
+   "name": "Cleaning",
+   "parent": "498c12c33e14"
+  },
+  {
+   "id": "e7ed885b9f12",
+   "name": "Loot & Banking",
+   "parent": "498c12c33e14"
+  },
+  {
+   "id": "b4913cf11b6e",
+   "name": "Truck & Escape",
+   "parent": "498c12c33e14"
+  },
+  {
+   "id": "6261bfd25a51",
+   "name": "Lobby & Shop",
+   "parent": "498c12c33e14"
+  },
+  {
+   "id": "5c32b93b7c7f",
+   "name": "Build a Ring Farm 2 Campaign",
+   "parent": "root"
+  },
+  {
+   "id": "52dc2e0cb71b",
+   "name": "Clips",
+   "parent": "5c32b93b7c7f"
+  },
+  {
+   "id": "294faab92b54",
+   "name": "Seed Rolls & Rare Pulls",
+   "parent": "52dc2e0cb71b"
+  }
+ ],
+ "files": [
+  {
+   "id": "1f8513c2f0ab",
+   "name": "Total Disaster 3.mp4",
+   "folder": "37d613455a88",
+   "kind": "video",
+   "size": 23919552,
+   "url": "o/1f8513c2f0ab/Total Disaster 3.mp4",
+   "dur": 11.7,
+   "w": 1080,
+   "h": 1920
+  },
+  {
+   "id": "02bd23542c98",
+   "name": "Cursed Sorcerers.mp4",
+   "folder": "refs",
+   "kind": "video",
+   "size": 21486216,
+   "url": "o/02bd23542c98/Cursed Sorcerers.mp4",
+   "dur": 10.7,
+   "w": 1080,
+   "h": 1920
+  },
+  {
+   "id": "6aa35d843e94",
+   "name": "Scrub or Die SD16.mp4",
+   "folder": "refs",
+   "kind": "video",
+   "size": 30417472,
+   "url": "o/6aa35d843e94/Scrub or Die SD16.mp4",
+   "dur": 24.4,
+   "w": 1080,
+   "h": 1920
+  },
+  {
+   "id": "c79b008ea79d",
+   "name": "Wii Party.mp3",
+   "folder": "db522789644f",
+   "kind": "audio",
+   "size": 6098067,
+   "url": "o/c79b008ea79d/Wii Party.mp3",
+   "dur": 152.4
+  },
+  {
+   "id": "4131a480ab9b",
+   "name": "Pop.mp3",
+   "folder": "ecac2940d884",
+   "kind": "audio",
+   "size": 5246,
+   "url": "o/4131a480ab9b/Pop.mp3",
+   "dur": 0.3
+  },
+  {
+   "id": "fe31ad22d864",
+   "name": "Clip 17 - Collecting loot + jumpscare.mp4",
+   "folder": "aa1bbd72c3aa",
+   "kind": "video",
+   "size": 26866188,
+   "url": "o/fe31ad22d864/Clip 17 - Collecting loot + jumpscare.mp4",
+   "dur": 14,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "id": "6ca684d9cd3f",
+   "name": "Clip 14 - Cleaning slime + jumpscare.mp4",
+   "folder": "aa1bbd72c3aa",
+   "kind": "video",
+   "size": 51900420,
+   "url": "o/6ca684d9cd3f/Clip 14 - Cleaning slime + jumpscare.mp4",
+   "dur": 26.1,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "id": "3d8cee50fa3a",
+   "name": "Clip 42 - Monster chase.mp4",
+   "folder": "aa1bbd72c3aa",
+   "kind": "video",
+   "size": 42589983,
+   "url": "o/3d8cee50fa3a/Clip 42 - Monster chase.mp4",
+   "dur": 22.3,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "id": "ce357d14ddd3",
+   "name": "Clip 53 - Banking loot + jumpscare.mp4",
+   "folder": "e7ed885b9f12",
+   "kind": "video",
+   "size": 17986675,
+   "url": "o/ce357d14ddd3/Clip 53 - Banking loot + jumpscare.mp4",
+   "dur": 9.1,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "id": "x1",
+   "name": "Clip 5 - Shop.mp4",
+   "folder": "6261bfd25a51",
+   "kind": "video",
+   "size": 1000000,
+   "url": "o/x1/Clip 5 - Shop.mp4",
+   "dur": 15.8,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "id": "x2",
+   "name": "Seeds 1.mp4",
+   "folder": "294faab92b54",
+   "kind": "video",
+   "size": 1000000,
+   "url": "o/x2/Seeds 1.mp4",
+   "dur": 9.0,
+   "w": 1920,
+   "h": 1080
+  }
+ ]
+}

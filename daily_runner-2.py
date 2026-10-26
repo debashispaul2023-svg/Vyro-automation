@@ -188,6 +188,11 @@ def _download_source_clip(url: str, dest_path: str) -> None:
     """
     os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
 
+    if "files.bloxclips.com" in (url or "").lower():
+        from bloxclips_footage import download as _hub_download
+        _hub_download(url, dest_path)
+        return
+
     ytdlp_result = subprocess.run(
         ["yt-dlp", "-f", "mp4/best", "-o", dest_path, url],
         capture_output=True,
@@ -234,8 +239,28 @@ def _pick_drive_folder(folder_url: str, dest_path: str) -> None:
     raise ClipPickError(f"No downloadable videos in Drive folder {folder_url}")
 
 
+def _auto_footage_source(campaign: Campaign) -> str:
+    """No source_clip_url configured: try the BloxClips hub from the campaign link/name alone."""
+    try:
+        from bloxclips_footage import resolve_campaign
+        hub = resolve_campaign(
+            link=getattr(campaign, "submit_page_url", "") or "",
+            name=getattr(campaign, "name", "") or "",
+        )
+    except Exception as exc:
+        print(f"[footage] hub auto-resolve failed: {exc}")
+        return ""
+    if hub and hub.clips:
+        print(f"[footage] auto-resolved hub for '{campaign.name}': {hub.footage_url} ({len(hub.clips)} clips)")
+        campaign.source_clip_url = hub.footage_url
+        return hub.footage_url
+    return ""
+
+
 def _list_campaign_clips(campaign: Campaign) -> list[dict[str, str]]:
     folder = getattr(campaign, "source_clip_url", "") or ""
+    if not folder.strip() and not (getattr(campaign, "reference_doc_url", None) or "").strip():
+        folder = _auto_footage_source(campaign)
     clips = list_content_folder_clips(
         source_clip_url=folder,
         reference_doc_url=getattr(campaign, "reference_doc_url", None) or "",
@@ -297,6 +322,22 @@ def _pin_icon_thumbnail(video_path: str) -> None:
 
 
 
+_ARC = ("jumpscare", "cleaning", "loot", "monster_attack", "monster_chase", "truck", "menu")
+
+
+def _arc_order(pool: list[dict]) -> list[dict]:
+    """Hub clips carry an `event` hint. One clip per event first, so the pack tells a story
+    (hook, setup, tension, payoff) instead of four versions of the same scene. No hints: unchanged."""
+    if len({c.get("event") for c in pool if c.get("event") not in (None, "", "unknown")}) < 2:
+        return pool
+    by_event: dict[str, list[dict]] = {}
+    for c in pool:
+        by_event.setdefault(c.get("event") or "unknown", []).append(c)
+    ordered = [by_event[e][0] for e in _ARC if by_event.get(e)]
+    rest = [c for c in pool if c not in ordered]
+    return ordered + rest
+
+
 def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict]:
     """3-4 unused official clips so the edit can explain the loop like the example."""
     first = _next_unused_clip(campaign, log)
@@ -349,6 +390,7 @@ def _next_unused_pack(campaign: Campaign, log: dict, want: int = 4) -> list[dict
             best_by_num[num] = c
     pool = list(best_by_num.values()) + leftovers
     pool.sort(key=lambda c: (-_ms(c), _clip_sort_key(c)))
+    pool = _arc_order(pool)
     pack = []
     if first and any(c["clip_id"] == first["clip_id"] for c in pool):
         pack.append(first)
@@ -1328,8 +1370,10 @@ def _find_campaign(skip_ids: set[str] | None = None) -> tuple[str, Campaign] | t
         print(f"Whop check failed: {exc}", file=sys.stderr)
         whop_campaign = None
 
-    if whop_campaign is not None and _screen_campaign("whop", whop_campaign):
-        return "whop", whop_campaign
+    if whop_campaign is not None:
+        plat = (getattr(whop_campaign, "platform", "") or "whop").strip().lower()
+        if _screen_campaign(plat, whop_campaign):
+            return plat, whop_campaign
 
     return None, None
 
@@ -1347,6 +1391,10 @@ def _instagram_permalink(media_id: str) -> str:
 def _submit_back(platform: str, campaign: Campaign, video_url: str) -> None:
     if platform == "vyro":
         vyro_run_submit(campaign, video_url)
+        return
+    if platform == "contentrewards":
+        import contentrewards_client
+        contentrewards_client.submit_video_link(campaign, video_url)
         return
     if platform != "whop":
         raise ValueError(f"Unknown platform: {platform}")
@@ -1694,7 +1742,7 @@ def _publish_and_submit(platform: str, campaign: Campaign, req: CampaignRequirem
         try:
             _submit_back(platform, campaign, submit_url)
             print(f"Submitted {submit_url} to {platform} campaign '{campaign.campaign_id}'.")
-        except (VyroClientError, WhopClientError) as exc:
+        except (VyroClientError, WhopClientError, RuntimeError) as exc:
             print(
                 f"Upload succeeded but {platform} submission failed: {exc}\n"
                 f"SUBMIT THIS URL MANUALLY: {submit_url}",

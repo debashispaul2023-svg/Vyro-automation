@@ -19,7 +19,14 @@
       "platform": "contentrewards",
       "source_clip_url": "https://footage.bloxclips.com/scrub-or-die-campaign",
       "payout": "$0.80 per 1K views per platform, min $0.80, max $300 per submission",
-      "note": "Current campaign. Clips come from the BloxClips footage site, not Drive. Bot cannot submit to contentrewards.com yet."
+      "note": "Clips come from the BloxClips footage hub (auto-resolved from this link). Requirements 'rules' above were confirmed by the account owner; the live page is locked until signed in (see CR_STORAGE_STATE).",
+      "requirements": [
+        "The name Scrub or Die must be spoken in the video.",
+        "Say that the game is out now.",
+        "A clear CTA: Game is called Scrub or Die.",
+        "1% engagement minimum or the clip is rejected.",
+        "Only Roblox accounts. English-based."
+      ]
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",

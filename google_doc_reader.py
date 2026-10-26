@@ -616,8 +616,11 @@ def resolve_and_download_footage(
                 clips = list_clips(url)
                 if not clips:
                     raise GoogleDocReadError(f"BloxClips hub has no videos: {url}")
+                # longest clip first: a 10s+ source gives the editor room to cut
+                clips.sort(key=lambda c: -float(c.get("duration_ms") or 0))
                 url = clips[0]["url"]
                 kind = "direct"
+            if kind == "drive_folder":
                 if pick_drive_folder_fn is None:
                     files = find_videos_in_drive_folder(url)
                     if not files:

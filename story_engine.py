@@ -17,6 +17,14 @@ _VISION_CALLS = 0
 _VISION_CAP = 3
 
 EVENT_WORDS = {
+    # Scrub or Die style (clip names on the BloxClips hub describe the action)
+    "jumpscare": ("jumpscare", "jump scare", "scare"),
+    "monster_attack": ("attack", "stun", "monster", "ghost", "ghoul"),
+    "monster_chase": ("chase", "escape", "flee"),
+    "cleaning": ("clean", "slime", "trash", "mirror", "kitchen", "shelf", "couch", "mop", "spray"),
+    "loot": ("loot", "banking", "collect", "stash"),
+    "truck": ("truck", "drive", "extract"),
+    # Roll-style games
     "rolling": ("spin", "roll", "wheel", "dice"),
     "character_reveal": ("character", "girl", "unlock", "reveal", "summon"),
     "money_reward": ("money", "cash", "$", "earn", "income", "qa/s", "t/s"),
@@ -24,9 +32,10 @@ EVENT_WORDS = {
     "luck": ("luck", "potion"),
     "rebirth": ("rebirth", "prestige"),
     "ui_result": ("reward", "result", "popup"),
-    "menu": ("shop", "inventory", "settings", "menu"),
+    "menu": ("shop", "inventory", "settings", "menu", "lobby", "daily", "equipment", "chapter", "index", "group"),
     "running": ("run", "walk", "obby"),
 }
+HORROR_EVENTS = {"jumpscare", "monster_attack", "monster_chase", "cleaning", "loot", "truck"}
 COMPAT = {
     "rolling": {"character_reveal", "ui_result", "plot_place", "money_reward"},
     "character_reveal": {"plot_place", "money_reward", "rolling"},
@@ -35,6 +44,13 @@ COMPAT = {
     "luck": {"rolling", "character_reveal", "money_reward"},
     "rebirth": {"money_reward", "plot_place"},
     "ui_result": {"character_reveal", "money_reward", "plot_place"},
+    # cleaning -> loot -> monster -> chase/escape is the horror arc
+    "cleaning": {"loot", "monster_attack", "jumpscare"},
+    "loot": {"monster_attack", "jumpscare", "truck", "cleaning"},
+    "monster_attack": {"monster_chase", "jumpscare", "truck"},
+    "monster_chase": {"truck", "jumpscare", "monster_attack"},
+    "jumpscare": {"monster_chase", "truck", "cleaning", "loot"},
+    "truck": {"menu", "loot", "cleaning"},
 }
 
 
@@ -92,6 +108,16 @@ def _scores(event: str, desc: str, duration: float) -> dict:
         story += 3; payoff += 2
     if event in ("luck", "rebirth", "running"):
         story -= 4; hook -= 3
+    if event == "jumpscare":
+        hook += 5; payoff += 3; action += 2
+    if event in ("monster_attack", "monster_chase"):
+        hook += 3; action += 4; story += 1
+    if event == "cleaning":
+        story += 3; hook += 0
+    if event == "loot":
+        story += 2; payoff += 2
+    if event == "truck":
+        payoff += 3; story += 1
     if event == "menu":
         hook -= 2; story -= 1
     if duration < 0.6:
@@ -175,22 +201,33 @@ def _describe_frame(frame_path: str) -> str:
     return ""
 
 
+SEG_LEN = float(os.environ.get("STORY_SEG_SECONDS") or 4.5)
+
+
 def analyze_clip(path: str, clip_id: str, name: str = "") -> list:
     dur = _probe(path)
     if dur <= 0.4 or not os.path.isfile(path):
         return []
-    windows = [(0.0, min(dur, 3.5))]
+    windows = [(0.0, min(dur, SEG_LEN))]
     if dur > 6:
-        windows.append((max(0.0, dur * 0.45), min(dur, dur * 0.45 + 3.2)))
+        windows.append((max(0.0, dur * 0.45), min(dur, dur * 0.45 + SEG_LEN)))
+    if dur > 16:
+        windows.append((max(0.0, dur * 0.75), min(dur, dur * 0.75 + SEG_LEN)))
+    hinted = _event_from_text(name)
+    skip_vision = hinted != "unknown" and (os.environ.get("STORY_VISION_FOR_HINTED") or "0") != "1"
     shots = []
-    for i, (a, b) in enumerate(windows[:2]):
+    for i, (a, b) in enumerate(windows[:3]):
         frame = f"{WORK}/f_{clip_id}_{i}.jpg"
-        desc = _describe_frame(frame) if _grab_frame(path, (a + b) / 2.0, frame) else ""
+        if skip_vision:
+            desc = ""          # the clip name already says what happens: no Gemini call, no 429
+        else:
+            desc = _describe_frame(frame) if _grab_frame(path, (a + b) / 2.0, frame) else ""
         analyzed = bool(desc)
         event = _event_from_text(f"{name} {desc}") if (desc or name) else "unknown"
         if not analyzed:
             event = _event_from_text(name) or "unknown"
-            desc = f"unanalyzed clip {name or clip_id}"
+            analyzed = event != "unknown"      # a descriptive hub clip name is real information
+            desc = f"{event} from clip name: {name or clip_id}" if event != "unknown" else f"unanalyzed clip {name or clip_id}"
         sc = _scores(event, desc, b - a)
         shots.append(Shot(
             clip_id=str(clip_id), path=path, name=name or clip_id,
@@ -224,7 +261,7 @@ def build_story(shots: list, target: float = 23.0) -> list:
     used = {(hook.path, round(hook.start, 1))}
     remain = [s for s in shots if (s.path, round(s.start, 1)) not in used]
     roles = ["SETUP", "ACTION", "RESULT", "PAYOFF"]
-    story_events = {"rolling", "character_reveal", "plot_place", "money_reward", "ui_result"}
+    story_events = {"rolling", "character_reveal", "plot_place", "money_reward", "ui_result"} | HORROR_EVENTS
     while remain and sum(s.duration for s in picked) < target - 2.2:
         story_left = [s for s in remain if s.gameplay_event in story_events or s.characters_visible]
         pool = story_left or remain

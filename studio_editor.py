@@ -210,12 +210,20 @@ def words_for_captions(text: str, words: list[dict], voice_end: float) -> list[d
     return out
 
 
-def write_ass(path: str, words: list[dict], keywords: set[str], tempo: float, ypos: int = 1190) -> int:
+CAPTION_FONT = int(os.environ.get("STUDIO_CAPTION_SIZE") or 66)     # small, not a giant overlay
+CAPTION_Y = int(os.environ.get("STUDIO_CAPTION_Y") or 1420)         # bottom third, under the picture
+FG_CROP = min(1.0, max(0.6, float(os.environ.get("STUDIO_FG_CROP") or 0.75)))   # share of the frame width kept sharp
+MAX_SHORT_SECONDS = float(os.environ.get("STUDIO_MAX_SECONDS") or 24.0)         # campaigns want under 25s
+
+
+def write_ass(path: str, words: list[dict], keywords: set[str], tempo: float, ypos: int = 0) -> int:
+    ypos = ypos or CAPTION_Y
     hdr = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
            "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-           "Style: Word,Inter SemiBold,98,&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,0,0,0,0,100,100,0,0,1,5,3,5,70,70,0,1\n\n"
+           "Style: Word,Inter SemiBold,{FONT},&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,0,0,0,0,100,100,0,0,1,5,3,5,70,70,0,1\n\n"
            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    hdr = hdr.replace("{FONT}", str(CAPTION_FONT))
     pop = r"\fscx85\fscy85\t(0,90,\fscx100\fscy100)"
     rows = [hdr]
     n = 0
@@ -249,14 +257,14 @@ def render_video(src: str, info: dict, segs: list, ass_path: str, out: str) -> b
     fc.append(f"{cat}concat=n={len(segs)}:v=1:a=1[vc][ac]")
     portrait = info["height"] > info["width"]
     bg = ("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=35:6,"
-          "eq=brightness=-0.02:saturation=1.15")
+          "eq=brightness=0.07:saturation=1.35:contrast=1.05")
     if portrait:
         fg = "scale=1080:-2:flags=lanczos"
         ov = "overlay=0:(H-h)/2"
     else:
         # Whole frame, full width, no crop (no zoom); blurred copy fills the rest of the 9:16 canvas.
-        fg = "scale=1080:-2:flags=lanczos,unsharp=5:5:0.3"
-        ov = "overlay=0:(H-h)/2-140"
+        fg = f"crop=iw*{FG_CROP}:ih:(iw-iw*{FG_CROP})/2:0,scale=1080:-2:flags=lanczos,unsharp=5:5:0.3"
+        ov = "overlay=0:(H-h)/2-60"
     fontdir = str(FONT_DIR).replace("\\", "/").replace(":", r"\:")
     ass_arg = str(ass_path).replace("\\", "/").replace(":", r"\:")
     fc.append(f"[vc]split[b0][f0];[b0]{bg}[bg];[f0]{fg}[fg];[bg][fg]{ov},ass='{ass_arg}':fontsdir='{fontdir}',format=yuv420p[v]")
@@ -417,7 +425,7 @@ def render_campaign_short(source: str, dest: str, campaign=None, req=None, clip_
     name = (getattr(campaign, "name", "") or "").strip()
     brief = getattr(campaign, "requirements_text", "") or ""
     max_s = float(getattr(req, "max_seconds", 30.0) or 30.0)
-    res = render_short(source, dest, name, brief, clip_index, max_seconds=min(30.0, max_s))
+    res = render_short(source, dest, name, brief, clip_index, max_seconds=min(MAX_SHORT_SECONDS, max_s))
     if not res.get("ok"):
         print(f"[studio] NOT USED, reason: {res.get('reason')}")
         if (os.environ.get("STUDIO_STRICT") or "0").strip() == "1":

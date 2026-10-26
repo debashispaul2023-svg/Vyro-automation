@@ -1,0 +1,32 @@
+name: TEST - Footage hub check (no upload, no render)
+
+# Resolves a campaign link to its BloxClips footage hub and prints clips, examples, rules.
+# No apt install, no ffmpeg, no upload: finishes in about a minute.
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: "Campaign link (Content Rewards / Whop / footage.bloxclips.com) or just the game name"
+        required: true
+        default: "https://contentrewards.com/c/campaigns/38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f"
+
+permissions:
+  contents: read
+
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Resolve hub
+        env:
+          VYRO_SKIP_UPLOAD: "1"
+          LINK: ${{ github.event.inputs.link }}
+        run: python bloxclips_footage.py "$LINK"
+      - name: Offline tests
+        run: python tests/test_bloxclips.py
