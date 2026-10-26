@@ -15,7 +15,6 @@ sys.modules["_whop_client_impl"] = _mod
 _spec.loader.exec_module(_mod)
 
 _mod.BLOX_CAMPAIGN_IDS = {
-    "Roll Anime Girls": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
     "Steal A Seed": "ad06c6d9-d46f-4b03-9bf8-58bf8a09cf5b",
     "Tongue Escape": "ce2f887e-f54d-43b0-a2b9-e8da505f7b7a",
     "How to Fisch": "b59bb70c-58bf-44c1-9e44-0b54c59d90f4",

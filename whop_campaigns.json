@@ -13,6 +13,14 @@
   ],
   "joined_campaigns": [
     {
+      "url": "https://contentrewards.com/c/campaigns/38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
+      "name_hint": "Scrub or Die",
+      "campaign_uuid": "38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
+      "platform": "contentrewards",
+      "payout": "$0.80 per 1K views per platform, min $0.80, max $300 per submission",
+      "note": "Current campaign. Footage/Drive folder missing: add source_clip_url when you have it. Bot cannot submit to contentrewards.com yet."
+    },
+    {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "Steal A Seed",
       "campaign_uuid": "ad06c6d9-d46f-4b03-9bf8-58bf8a09cf5b",
@@ -36,14 +44,6 @@
       "reference_doc_url": "https://docs.google.com/document/d/1SElAyAAOG7TgE2fOgAcfEJuMk7dDdzqf9F428W3tSYQ/edit?usp=sharing",
       "discord": "https://discord.gg/jMm6EdTpZj",
       "note": "No Drive footage folder yet."
-    },
-    {
-      "url": "https://contentrewards.com/c/campaigns/38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
-      "name_hint": "Scrub or Die",
-      "campaign_uuid": "38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
-      "platform": "contentrewards",
-      "payout": "$0.80 per 1K views per platform, min $0.80, max $300 per submission",
-      "note": "BloxClips x Content Rewards. Footage/Drive folder + rules are locked until joined: add source_clip_url when you have the footage folder. The bot cannot submit to contentrewards.com yet - post, then submit the link by hand."
     }
   ]
 }
