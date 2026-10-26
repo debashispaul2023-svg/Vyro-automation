@@ -1535,7 +1535,9 @@ def process_campaign(platform: str, campaign: Campaign, preferred_clip: dict | N
                 for i, clip in enumerate(pack[:5]):
                     fid = clip.get("clip_id") or ""
                     dest_clip = f"work/adaptive_sources/{i:02d}_{fid[:8]}.mp4"
-                    if fid and key:
+                    if clip.get("kind") == "direct" and clip.get("url"):
+                        _download_source_clip(clip["url"], dest_clip)
+                    elif fid and key:
                         download_drive_file(fid, dest_clip, key)
                     if os.path.isfile(dest_clip):
                         print(f"[adaptive] selected id={fid} file={clip.get('name')} path={dest_clip}")

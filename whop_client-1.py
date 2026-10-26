@@ -864,6 +864,13 @@ def _campaign_from_config(entry: dict) -> Optional[WhopCampaign]:
             "A clear CTA must be included. Example: Game is called World Athletics on Roblox.\n"
             "Only Roblox accounts. English-based."
         )
+    elif "scrub" in name.lower():
+        rules = (
+            f"{name}\n"
+            "The name Scrub or Die must be spoken somewhere in the video.\n"
+            "A clear CTA must be included. Example: Game is called Scrub or Die on Roblox.\n"
+            "Only Roblox accounts. English-based."
+        )
     print(f"[whop_client] config fallback campaign={cid} source={source[:80]}")
     return WhopCampaign(
         campaign_id=cid,

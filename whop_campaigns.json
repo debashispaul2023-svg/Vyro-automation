@@ -17,8 +17,9 @@
       "name_hint": "Scrub or Die",
       "campaign_uuid": "38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",
       "platform": "contentrewards",
+      "source_clip_url": "https://footage.bloxclips.com/scrub-or-die-campaign",
       "payout": "$0.80 per 1K views per platform, min $0.80, max $300 per submission",
-      "note": "Current campaign. Footage/Drive folder missing: add source_clip_url when you have it. Bot cannot submit to contentrewards.com yet."
+      "note": "Current campaign. Clips come from the BloxClips footage site, not Drive. Bot cannot submit to contentrewards.com yet."
     },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",

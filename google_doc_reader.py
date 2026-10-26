@@ -328,6 +328,7 @@ def find_candidate_source_clips(doc_text: str) -> list[str]:
                 "youtube.com",
                 "youtu.be",
                 "vimeo.com",
+                "footage.bloxclips.com",
             )
         ):
             if cleaned not in seen:
@@ -513,6 +514,8 @@ def resolve_candidate_source_clips(
 def classify_footage_url(url: str) -> str:
     """Which adapter should handle this URL."""
     low = (url or "").lower()
+    if "footage.bloxclips.com" in low:
+        return "bloxclips"
     if is_drive_folder_url(url):
         return "drive_folder"
     if extract_drive_file_id(url):
@@ -573,6 +576,7 @@ def resolve_and_download_footage(
         candidates.insert(0, configured)
 
     priority = {
+        "bloxclips": 0,
         "drive_folder": 0,
         "drive_file": 1,
         "direct": 2,
@@ -607,7 +611,13 @@ def resolve_and_download_footage(
             if kind == "unknown":
                 print(f"[resolver] skip unknown host: {url}")
                 continue
-            if kind == "drive_folder":
+            if kind == "bloxclips":
+                from bloxclips_footage import list_clips
+                clips = list_clips(url)
+                if not clips:
+                    raise GoogleDocReadError(f"BloxClips hub has no videos: {url}")
+                url = clips[0]["url"]
+                kind = "direct"
                 if pick_drive_folder_fn is None:
                     files = find_videos_in_drive_folder(url)
                     if not files:
@@ -670,6 +680,13 @@ def list_content_folder_clips(
     seen: set[str] = set()
     for url in candidates:
         kind = classify_footage_url(url)
+        if kind == "bloxclips":
+            from bloxclips_footage import list_clips
+            for clip in list_clips(url):
+                if clip["clip_id"] not in seen:
+                    seen.add(clip["clip_id"])
+                    out.append(clip)
+            continue
         if kind == "drive_folder":
             for clip in collect_video_clips_in_drive_folder(url):
                 if clip.file_id not in seen:
