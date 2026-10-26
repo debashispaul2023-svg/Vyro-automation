@@ -1,4 +1,9 @@
-"""ElevenLabs only. Rotate keys. No espeak / Edge fallback."""
+"""ElevenLabs only. Rotate keys. No espeak / Edge fallback.
+
+Free ElevenLabs plans cannot use *library* voices through the API (HTTP 402 paid_plan_required).
+When that happens the engine stops hammering keys/models for that voice and falls back to a
+voice the account can use (a premade voice found via GET /v1/voices, or ELEVENLABS_FALLBACK_VOICE_ID).
+"""
 from __future__ import annotations
 
 import base64
@@ -114,17 +119,90 @@ def _humanize_script(text: str) -> str:
     return text
 
 
+def _is_plan_block(resp) -> bool:
+    try:
+        return resp.status_code == 402 or "paid_plan_required" in resp.text
+    except Exception:
+        return False
+
+
+def _fallback_voices(key: str, tried: set[str]) -> list[str]:
+    """Voices this account can use on a free plan: explicit env id, then premade voices."""
+    out: list[str] = []
+    env = (os.environ.get("ELEVENLABS_FALLBACK_VOICE_ID") or "").strip()
+    if env and env not in tried:
+        out.append(env)
+    try:
+        r = requests.get(f"{ELEVENLABS_BASE}/voices", headers={"xi-api-key": key}, timeout=30)
+        if r.status_code == 200:
+            voices = r.json().get("voices", [])
+            # own/cloned/designed voices first, then premade; skip anything already tried
+            order = {"generated": 0, "cloned": 0, "premade": 1, "professional": 2}
+            voices = sorted(voices, key=lambda v: order.get(v.get("category"), 3))
+            for v in voices:
+                vid = v.get("voice_id")
+                if vid and vid not in tried and vid not in out and v.get("category") in order:
+                    out.append(vid)
+        else:
+            print(f"[voice] could not list voices: HTTP {r.status_code}")
+    except Exception as exc:
+        print(f"[voice] could not list voices: {exc}")
+    return out[:4]
+
+
+def _try_voice(voice: str, keys: list[str], spoken: str, settings: dict, dest_mp3: str):
+    """Returns (words, blocked). words is None on failure; blocked=True means a plan block."""
+    url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
+    for i, key in enumerate(keys, start=1):
+        masked = f"...{key[-4:]}" if len(key) > 4 else "****"
+        try:
+            print(f"[voice] ElevenLabs key #{i}/{len(keys)} ({masked}) voice={voice[-6:]}")
+            resp = None
+            for model in (DEFAULT_MODEL, FALLBACK_MODEL, LAST_RESORT_MODEL):
+                payload = {"text": spoken, "model_id": model, "apply_text_normalization": "auto"}
+                if model not in MODELS_WITHOUT_SETTINGS:
+                    payload["voice_settings"] = dict(settings)
+                resp = requests.post(url, headers={"xi-api-key": key, "Content-Type": "application/json"},
+                                     json=payload, params={"output_format": "mp3_44100_128"}, timeout=60)
+                if resp.status_code == 400 and "speed" in (payload.get("voice_settings") or {}):
+                    payload["voice_settings"].pop("speed", None)
+                    resp = requests.post(url, headers={"xi-api-key": key, "Content-Type": "application/json"},
+                                         json=payload, params={"output_format": "mp3_44100_128"}, timeout=60)
+                if resp.status_code == 200:
+                    print(f"[voice] model {model}")
+                    break
+                print(f"[voice] model {model} HTTP {resp.status_code}: {resp.text[:120]}")
+                if _is_plan_block(resp):
+                    # Same answer for every model and every free key: stop, try another voice.
+                    print(f"[voice] voice {voice[-6:]} needs a paid plan on the API; skipping it")
+                    return None, True
+            if resp is None or resp.status_code != 200:
+                continue
+            data = resp.json()
+            audio_b64 = data.get("audio_base64") or ""
+            if not audio_b64:
+                print(f"[voice] key #{i} no audio_base64")
+                continue
+            Path(dest_mp3).write_bytes(base64.b64decode(audio_b64))
+            words = _words_from_alignment(spoken, data.get("alignment"))
+            Path(dest_mp3).with_suffix(".words.json").write_text(json.dumps(words), encoding="utf-8")
+            return words, False
+        except Exception as exc:
+            print(f"[voice] key #{i} failed: {exc}")
+    return None, False
+
+
 def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]]:
     """
     Returns (mp3_path_or_None, word_timings).
-    No voice file if every key fails — caller must skip TTS.
+    No voice file if every voice/key fails; the caller must skip TTS.
     """
     text = (text or "").strip()
     if not text:
         return None, []
     keys = _keys()
     if not keys:
-        print("[voice] no ELEVENLABS_API_KEY / ELEVENLABS_API_KEYS — skipping voice")
+        print("[voice] no ELEVENLABS_API_KEY / ELEVENLABS_API_KEYS; skipping voice")
         return None, []
 
     spoken = _humanize_script(text)
@@ -137,73 +215,29 @@ def generate_voiceover(text: str, dest_mp3: str) -> tuple[str | None, list[dict]
             return None, []
     except ImportError:
         usage_guard = None
-    voice = _voice()
-    url = f"{ELEVENLABS_BASE}/text-to-speech/{voice}/with-timestamps"
-    settings = {
-        "stability": 0.18,
-        "similarity_boost": 0.62,
-        "style": 0.82,
-        "use_speaker_boost": True,
-        "speed": 1.08,
-    }
+    settings = {"stability": 0.18, "similarity_boost": 0.62, "style": 0.82,
+                "use_speaker_boost": True, "speed": 1.08}
     Path(dest_mp3).parent.mkdir(parents=True, exist_ok=True)
 
-    for i, key in enumerate(keys, start=1):
-        masked = f"...{key[-4:]}" if len(key) > 4 else "****"
-        try:
-            print(f"[voice] ElevenLabs key #{i}/{len(keys)} ({masked}) voice={voice[-6:]}")
-            resp = None
-            last_status = None
-            for model in (DEFAULT_MODEL, FALLBACK_MODEL, LAST_RESORT_MODEL):
-                payload = {
-                    "text": spoken,
-                    "model_id": model,
-                    "apply_text_normalization": "auto",
-                }
-                if model not in MODELS_WITHOUT_SETTINGS:
-                    payload["voice_settings"] = dict(settings)
-                resp = requests.post(
-                    url,
-                    headers={"xi-api-key": key, "Content-Type": "application/json"},
-                    json=payload,
-                    params={"output_format": "mp3_44100_128"},
-                    timeout=60,
-                )
-                last_status = resp.status_code
-                if resp.status_code == 200:
-                    print(f"[voice] model {model}")
-                    break
-                if resp.status_code == 400 and "speed" in (payload.get("voice_settings") or {}):
-                    payload["voice_settings"].pop("speed", None)
-                    resp = requests.post(
-                        url,
-                        headers={"xi-api-key": key, "Content-Type": "application/json"},
-                        json=payload,
-                        params={"output_format": "mp3_44100_128"},
-                        timeout=60,
-                    )
-                    if resp.status_code == 200:
-                        print(f"[voice] model {model} (no speed field)")
-                        break
-                print(f"[voice] model {model} HTTP {resp.status_code}: {resp.text[:120]}")
-            if resp is None or last_status != 200:
-                continue
-            data = resp.json()
-            audio_b64 = data.get("audio_base64") or ""
-            if not audio_b64:
-                print(f"[voice] key #{i} no audio_base64")
-                continue
-            Path(dest_mp3).write_bytes(base64.b64decode(audio_b64))
-            words = _words_from_alignment(spoken, data.get("alignment"))
-            side = Path(dest_mp3).with_suffix(".words.json")
-            side.write_text(json.dumps(words), encoding="utf-8")
+    tried: set[str] = set()
+    voice = _voice()
+    queue = [voice]
+    fallbacks_loaded = False
+    while queue:
+        voice = queue.pop(0)
+        if voice in tried:
+            continue
+        tried.add(voice)
+        words, blocked = _try_voice(voice, keys, spoken, settings, dest_mp3)
+        if words is not None:
             if usage_guard:
                 usage_guard.record_tts(len(spoken))
-            print(f"[voice] ElevenLabs ok ({len(words)} word timings)")
+            print(f"[voice] ElevenLabs ok ({len(words)} word timings) voice={voice[-6:]}")
             return dest_mp3, words
-        except Exception as exc:
-            print(f"[voice] key #{i} failed: {exc}")
-            continue
+        if blocked and not fallbacks_loaded:
+            fallbacks_loaded = True
+            queue.extend(_fallback_voices(keys[0], tried))
+            print(f"[voice] fallback voices to try: {[v[-6:] for v in queue]}")
 
-    print("[voice] every ElevenLabs key failed — no voiceover")
+    print("[voice] every ElevenLabs voice/key failed; no voiceover")
     return None, []
