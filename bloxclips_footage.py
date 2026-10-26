@@ -70,7 +70,14 @@ def load_manifest(path: str | None = None, retries: int = 3) -> dict:
     last: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(MANIFEST, timeout=30)
+            resp = requests.get(
+                MANIFEST,
+                timeout=30,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://footage.bloxclips.com/",
+                },
+            )
             resp.raise_for_status()
             data = resp.json()
             _cache.update(m=data, t=time.time())
