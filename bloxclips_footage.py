@@ -19,6 +19,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import requests
@@ -85,6 +86,11 @@ def load_manifest(path: str | None = None, retries: int = 3) -> dict:
         except Exception as exc:  # network, JSON, 5xx
             last = exc
             time.sleep(1.5 * attempt)
+    snap = Path(__file__).with_name("data") / "bloxclips_manifest.json"
+    if snap.is_file():
+        print(f"[bloxclips] live manifest blocked ({last}); using snapshot {snap.name}")
+        with open(snap, "r", encoding="utf-8") as fh:
+            return json.load(fh)
     raise RuntimeError(f"[bloxclips] manifest unavailable: {last}")
 
 
