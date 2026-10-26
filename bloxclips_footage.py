@@ -25,6 +25,7 @@ from urllib.parse import quote, urlparse
 import requests
 
 MANIFEST = "https://files.bloxclips.com/manifest.json"
+FILES = "https://files.bloxclips.com"
 MIRROR = "https://github.com/debashispaul2023-svg/Vyro-automation/releases/download/bloxclips-mirror"
 HUB = "https://footage.bloxclips.com"
 SKIP_FOLDERS = {"music", "sound effects", "sfx"}
