@@ -291,11 +291,16 @@ def list_clips(url: str, name: str = "") -> list[dict]:
 
 def download(url: str, dest: str, expected_size: int = 0, retries: int = 3) -> str:
     """Stream a hub file to dest. Verifies the size when the manifest gave one."""
+    import subprocess
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://footage.bloxclips.com/",
+    }
     last: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            with requests.get(url, stream=True, timeout=60) as resp:
+            with requests.get(url, stream=True, timeout=90, headers=headers) as resp:
                 resp.raise_for_status()
                 with open(dest, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=1 << 20):
@@ -306,6 +311,15 @@ def download(url: str, dest: str, expected_size: int = 0, retries: int = 3) -> s
             return dest
         except Exception as exc:
             last = exc
+            try:
+                subprocess.run(
+                    ["curl", "-fsSL", "-A", "Mozilla/5.0", "-e", "https://footage.bloxclips.com/", "-o", dest, url],
+                    check=True, timeout=120,
+                )
+                if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
+                    return dest
+            except Exception as curl_exc:
+                last = curl_exc
             time.sleep(1.5 * attempt)
     raise RuntimeError(f"[bloxclips] download failed {url}: {last}")
 
