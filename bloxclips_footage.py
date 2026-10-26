@@ -25,7 +25,7 @@ from urllib.parse import quote, urlparse
 import requests
 
 MANIFEST = "https://files.bloxclips.com/manifest.json"
-FILES = "https://files.bloxclips.com"
+MIRROR = "https://github.com/debashispaul2023-svg/Vyro-automation/releases/download/bloxclips-mirror"
 HUB = "https://footage.bloxclips.com"
 SKIP_FOLDERS = {"music", "sound effects", "sfx"}
 EXAMPLES_FOLDER_ID = "refs"          # "Finished videos"
@@ -320,6 +320,16 @@ def download(url: str, dest: str, expected_size: int = 0, retries: int = 3) -> s
                     return dest
             except Exception as curl_exc:
                 last = curl_exc
+            clip_id = url.split("/o/")[-1].split("/")[0] if "/o/" in url else ""
+            if clip_id:
+                mirror = f"{MIRROR}/{clip_id}.mp4"
+                try:
+                    subprocess.run(["curl", "-fsSL", "-L", "-o", dest, mirror], check=True, timeout=180)
+                    if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
+                        print(f"[bloxclips] downloaded mirror {clip_id}")
+                        return dest
+                except Exception as mirror_exc:
+                    last = mirror_exc
             time.sleep(1.5 * attempt)
     raise RuntimeError(f"[bloxclips] download failed {url}: {last}")
 
