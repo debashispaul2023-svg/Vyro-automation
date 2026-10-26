@@ -282,8 +282,10 @@ def _cut_segment(src: str, start: float, end: float, dest: str) -> bool:
         subprocess.run(
             ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-t", f"{ln:.2f}", "-i", src,
              "-filter_complex",
-             "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:1[bg];"
-             "[0:v]scale=-2:1700[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1",
+             # Keep the segment LANDSCAPE (whole frame, no crop). studio_editor frames it for 9:16 with the
+             # blurred background. The old 1700px-tall crop showed only ~35% of the picture (the zoom bug).
+             "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
              "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
              "-c:a", "aac", "-ar", "44100", dest],
             check=True, capture_output=True, timeout=60,

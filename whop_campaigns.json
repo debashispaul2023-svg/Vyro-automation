@@ -6,20 +6,12 @@
   ],
   "allow_name_markers": [
     "how to fisch",
-    "roll anime girls",
     "scrub or die",
     "steal a seed",
     "sunshine valley",
     "world athletics"
   ],
   "joined_campaigns": [
-    {
-      "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/campaigns/117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
-      "name_hint": "Roll Anime Girls",
-      "campaign_uuid": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
-      "game_link": "https://www.roblox.com/games/92289737492030/Roll-Anime-Girls",
-      "reference_doc_url": "https://docs.google.com/document/d/1RRD6Jmnc9YQBqprv3ipjZpt3c5hDmVAzh_-K8fZnKoM/edit?usp=sharing"
-    },
     {
       "url": "https://whop.com/bloxclips/exp_EfN9ClEYDL8Bh9/app/",
       "name_hint": "Steal A Seed",
@@ -43,8 +35,7 @@
       "platform": "contentrewards",
       "reference_doc_url": "https://docs.google.com/document/d/1SElAyAAOG7TgE2fOgAcfEJuMk7dDdzqf9F428W3tSYQ/edit?usp=sharing",
       "discord": "https://discord.gg/jMm6EdTpZj",
-      "hold_until_campaign": "117ddb85-e38d-47e2-abc1-9bbaf7ec8d1c",
-      "note": "Do not select until Roll Anime Girls clips are exhausted. No Drive footage folder yet."
+      "note": "No Drive footage folder yet."
     },
     {
       "url": "https://contentrewards.com/c/campaigns/38bf82b8-47f0-4956-a0f8-9a4c73ba0a1f",

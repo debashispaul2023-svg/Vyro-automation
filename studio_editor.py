@@ -249,13 +249,14 @@ def render_video(src: str, info: dict, segs: list, ass_path: str, out: str) -> b
     fc.append(f"{cat}concat=n={len(segs)}:v=1:a=1[vc][ac]")
     portrait = info["height"] > info["width"]
     bg = ("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=35:6,"
-          "eq=brightness=-0.12:saturation=1.1")
+          "eq=brightness=-0.02:saturation=1.15")
     if portrait:
         fg = "scale=1080:-2:flags=lanczos"
         ov = "overlay=0:(H-h)/2"
     else:
-        fg = "crop=ih:ih*0.935:(iw-ih)/2:(ih-ih*0.935)/2,scale=1080:1010:flags=lanczos,unsharp=5:5:0.3"
-        ov = "overlay=0:455"
+        # Whole frame, full width, no crop (no zoom); blurred copy fills the rest of the 9:16 canvas.
+        fg = "scale=1080:-2:flags=lanczos,unsharp=5:5:0.3"
+        ov = "overlay=0:(H-h)/2-140"
     fontdir = str(FONT_DIR).replace("\\", "/").replace(":", r"\:")
     ass_arg = str(ass_path).replace("\\", "/").replace(":", r"\:")
     fc.append(f"[vc]split[b0][f0];[b0]{bg}[bg];[f0]{fg}[fg];[bg][fg]{ov},ass='{ass_arg}':fontsdir='{fontdir}',format=yuv420p[v]")
